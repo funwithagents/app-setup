@@ -15,7 +15,7 @@ Structure and tooling for the module-setup project itself: Python version, depen
 
 ## Decided
 
-- **Python version:** 3.12+ minimum.
+- **Python version:** 3.11+ minimum: the lowest version among the libraries that run the conformance check in their tests, since each installs this package as a dev dependency.
 - **Package layout:** `src/` layout — `src/module_setup/...` — not flat, to avoid accidentally importing an uninstalled package from the repo root.
 - **Dependency/venv management:** `uv`. Dev tooling lives in the `dev` dependency group (`uv sync --dev`), not in runtime `dependencies`.
 - **Runtime dependencies:** `packaging` only, to read requirement strings and extra names. The Gradio pieces will sit behind an extra, so that a library using the conformance check in its tests installs no UI.

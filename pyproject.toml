@@ -8,7 +8,7 @@ authors = [
 ]
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 dependencies = [
     "packaging>=26.3",
 ]
@@ -25,7 +25,7 @@ dev = [
 ]
 
 [tool.ruff]
-target-version = "py312"  # keep in sync with requires-python
+target-version = "py311"  # keep in sync with requires-python
 
 [tool.pytest.ini_options]
 # Only the fast, deterministic tier is collected by default; tests-e2e/ is opt-in.
@@ -35,5 +35,5 @@ testpaths = ["tests"]
 include = ["src", "tests", "tests-e2e"]  # type-check test code too, not just src
 venvPath = "."
 venv = ".venv"
-pythonVersion = "3.12"
+pythonVersion = "3.11"
 typeCheckingMode = "standard"
