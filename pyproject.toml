@@ -1,0 +1,39 @@
+[project]
+name = "module-setup"
+version = "0.1.0"
+description = "The Setup side of a module-based app: choose a module, edit its config from its schema, install its extra, prepare what it needs, then start a session."
+readme = "README.md"
+authors = [
+    { name = "Thibault Hervier", email = "thibault@fr2g.io" }
+]
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+dependencies = [
+    "packaging>=26.3",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.29,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.414",
+    "pytest>=9.2.0",
+    "ruff>=0.17.6",
+]
+
+[tool.ruff]
+target-version = "py312"  # keep in sync with requires-python
+
+[tool.pytest.ini_options]
+# Only the fast, deterministic tier is collected by default; tests-e2e/ is opt-in.
+testpaths = ["tests"]
+
+[tool.pyright]
+include = ["src", "tests", "tests-e2e"]  # type-check test code too, not just src
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
