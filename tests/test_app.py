@@ -130,6 +130,20 @@ def test_an_extra_no_host_extra_carries_says_so(
     assert not item.installable
 
 
+def test_a_section_with_problems_is_not_asked_what_the_machine_needs(
+    tmp_path: Path, lib: SpeechLib
+) -> None:
+    model = _model(tmp_path, lib)
+    unfinished = {"speech": {"module": {}}}  # the fake's check_setup would raise on it
+
+    assert model.check_setup(unfinished) == []
+    model.prepare(unfinished)
+    assert model.blockers(unfinished) == [
+        f"{p.path}: {p.message}" for p in model.check_config(unfinished)
+    ]
+    assert model.blockers(unfinished)
+
+
 def test_files_are_prepared_then_ready(tmp_path: Path, lib: SpeechLib) -> None:
     model = _model(tmp_path, lib)
     progress: list[dict[str, Any]] = []

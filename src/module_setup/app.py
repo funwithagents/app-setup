@@ -244,7 +244,8 @@ class AppModel:
 
     def check_setup(self, config: Mapping[str, Any]) -> list[SetupItem]:
         """What this machine is missing for every section the config uses: each section's
-        `check_setup` items, an extra's item told which of the host's extras installs it."""
+        `check_setup` items, an extra's item told which of the host's extras installs it. A
+        section whose document has problems is skipped: it is asked once it is right."""
         found: list[SetupItem] = []
         for name in self.used(config):
             section = self.section(name)
@@ -266,7 +267,11 @@ class AppModel:
                 )
                 continue
             document = config.get(name)
-            if not isinstance(document, Mapping):
+            if not isinstance(document, Mapping) or contract.check_config(
+                copy.deepcopy(dict(document))
+            ):
+                # The contract asks `check_setup` only about a config `check_config`
+                # accepts; the config's problems are reported by `check_config`.
                 continue
             for item in contract.check_setup(copy.deepcopy(dict(document))):
                 found.append(self._item(name, item))
