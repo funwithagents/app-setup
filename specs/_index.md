@@ -13,6 +13,7 @@ module-setup is the Setup side of an app built from configurable libraries: libr
 | [project.md](project.md) | Project structure and tooling: Python version, packaging with uv, layout conventions | Implemented |
 | [testing.md](testing.md) | Testing strategy: two-tier `tests/`/`tests-e2e/` split, functional-test philosophy, skip-without-credentials live tier | Implemented |
 | [module-contract.md](module-contract.md) | The contract a library implements, as plain data and seven functions: `describe` (the config's JSON Schema, annotated), `requirements`, `validate`, `check`, `prepare`, `options`, `probe` (run it once, for real); what module-setup parses and the conformance check a library runs in its tests | Implemented |
+| [extras.md](extras.md) | What is done with a requirement such as `speech-lib[local-voice]`: whether it is installed and available on this platform (from package metadata, nothing imported), which extra of the host carries it, and the uv install that adds extras from the host's lock without removing anything | Implemented |
 | _(add concept specs here — see [_spec-template.md](_spec-template.md))_ | | |
 
 Each spec also opens with a YAML **frontmatter** block declaring the `code:` and `tests:` files it governs — the spec → code/tests mapping the spec-drift checks use to scope what they compare. Keep it current when files move, and see [AGENTS.md](../AGENTS.md) ("Spec frontmatter") for the full convention. A spec that is not yet `Implemented` may name the files it *will* govern.

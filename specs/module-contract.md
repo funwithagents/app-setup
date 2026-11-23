@@ -15,7 +15,7 @@ The contract is what a library implements so that an app can set it up without k
 
 Two rules shape it:
 
-- **A library declares, it does not act.** It never installs a package and never runs uv. Only the host knows its own extras and its lock, so installing is module-setup's job (the `extras` spec, planned).
+- **A library declares, it does not act.** It never installs a package and never runs uv. Only the host knows its own extras and its lock, so installing is module-setup's job ([extras.md](extras.md)).
 - **Plain data, no shared types.** A library imports nothing from module-setup. What it returns is JSON-compatible: dicts, lists, strings, numbers, booleans, `None`. A library's own code can therefore implement the contract with no new dependency.
 
 ## The contract object
@@ -169,7 +169,7 @@ The optional dependencies this config needs, each a requirement string naming **
 It is a function of the config, not an annotation on the schema, because what decides a requirement is not always a module choice: a robot library's `sim` extra can follow a plain `backend` field, and one module can pick between two extras by platform.
 
 - **It reads only the fields that decide.** It is called on configs that are incomplete or invalid — the form asks "what would this need?" for each module of a dropdown, before the user has filled anything — so it ignores everything else and never raises. An unknown module yields `[]`; `validate` is what reports it.
-- **It says what the config needs, not whether it is installed.** Whether a requirement is installed, and whether it can be on this platform, is read from package metadata by module-setup (the `extras` spec), with no code in the library.
+- **It says what the config needs, not whether it is installed.** Whether a requirement is installed, and whether it can be on this platform, is read from package metadata by module-setup ([extras.md](extras.md)), with no code in the library.
 
 ## `validate`
 

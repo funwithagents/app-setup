@@ -48,7 +48,6 @@ The contract is drafted first because every library builds against it. The other
 
 | Spec | What it will cover |
 |---|---|
-| extras | Is a requirement installed (from package metadata, without importing it), is it available on this platform, which host extra carries it, the uv install |
 | config-folder | The app's folder: the default config, the current config, the settings (autostart) |
 | secrets | The environment variables a config references, where each comes from (shell, the folder's `.env`), storing one |
 | session | The Start/Stop state machine, the config locked during a session, autostart |

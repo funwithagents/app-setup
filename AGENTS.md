@@ -23,6 +23,7 @@ Where things live. This is a coarse, module-level map — for the full file inve
 
 | Module | Role | Spec |
 |---|---|---|
+| [extras.py](src/module_setup/extras.py) | Requirements against the installed environment, read from package metadata without importing anything: `requirement_status` (installed, missing, unavailable on this platform), `host_extras` (which extra of the host carries a library's requirement), `find_installer` / `Installer` (add extras from the host's lock with uv) | [extras.md](specs/extras.md) |
 | [contract.py](src/module_setup/contract.py) | The module contract from the consuming side: the `SetupContract` protocol, `parse_description` (a `describe()` result into the frozen objects a form is drawn from, refusing what is outside the spec), `check_contract` (the conformance check a library runs in its tests) | [module-contract.md](specs/module-contract.md) |
 
 **Keep this map current:** when you add, rename, or remove a top-level `src/module_setup/` module or a root directory, update the map in the same change — same discipline as keeping spec/plan statuses honest (below). A test (`tests/test_project_map.py`) enforces that every `src/module_setup/*.py` module appears here and vice-versa — and that the spec frontmatter (see below) stays honest too.
