@@ -59,7 +59,7 @@ def test_the_form_draws_the_selected_module_s_fields(tmp_path: Path) -> None:
     assert labels[:2] == ["Voice", "voice_id *"]
     assert "speed" in labels and "api_key_env" in labels and "timeout" in labels
     assert "api_key" not in labels  # a key written in the config is never drawn
-    assert "Use gate" in labels
+    assert "Configure gate" in labels
     voice_id = next(c for c in components if c.label == "voice_id *")
     assert voice_id.value == "v1"
 

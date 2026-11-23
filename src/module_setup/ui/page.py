@@ -81,7 +81,9 @@ def build_page(model: AppModel, *, selected: str = "setup") -> gr.Blocks:
                     reload = gr.Button("Revert to saved", scale=0)
                     reset = gr.Button("Reset to defaults", scale=0)
                     autostart = gr.Checkbox(
-                        label="Start a session when the app launches", scale=1
+                        label="Start a session when the app launches",
+                        scale=1,
+                        interactive=True,
                     )
                 notice = gr.Markdown()
 

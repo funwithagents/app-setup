@@ -68,16 +68,21 @@ def _field(field: FormField, full: Path, draft: gr.State) -> None:
     if field.widget == "checkbox":
         value = field.value if present else bool(field.spec.default)
         component = gr.Checkbox(
-            value=value, label=_label(field), info=field.spec.description
+            value=value,
+            label=_label(field),
+            info=field.spec.description,
+            interactive=True,
         )
-    elif field.widget in ("number", "integer"):
+    elif field.widget in ("number", "integer") and (present or field.spec.has_default):
+        # An absent number shows its default, which `coerce` writes back as absent.
         component = gr.Number(
-            value=field.value if present else None,
+            value=field.value if present else field.spec.default,
             label=_label(field),
             info=info,
             precision=0 if field.widget == "integer" else None,
             minimum=field.spec.minimum,
             maximum=field.spec.maximum,
+            interactive=True,
         )
     elif field.widget == "dropdown":
         values = {json.dumps(choice): choice for choice in field.choices}
@@ -88,6 +93,7 @@ def _field(field: FormField, full: Path, draft: gr.State) -> None:
             value=json.dumps(field.value) if present else "",
             label=_label(field),
             info=field.spec.description,
+            interactive=True,
         )
 
         def write_choice(raw: Any, config: Config) -> Config:
@@ -100,15 +106,18 @@ def _field(field: FormField, full: Path, draft: gr.State) -> None:
             value=json.dumps(field.value, indent=2) if present else "",
             language="json",
             label=_label(field) + " — " + (field.spec.description or ""),
+            interactive=True,
         )
         component.blur(write, inputs=[component, draft], outputs=[draft])
         return
     else:
+        # Text, and a number with no default and no value: a number box cannot be empty.
         component = gr.Textbox(
             value=str(field.value) if present and field.value is not None else "",
             label=_label(field),
             info=field.spec.description,
-            placeholder=default,
+            placeholder=default or ("a number" if field.widget != "text" else ""),
+            interactive=True,
         )
     component.input(write, inputs=[component, draft], outputs=[draft])
 
@@ -119,6 +128,7 @@ def _raw(item: FormRaw, full: Path, draft: gr.State) -> None:
         value=json.dumps(item.value, indent=2) if present else "",
         language="json",
         label=f"{item.label} — {item.description or 'free-form JSON'}",
+        interactive=True,
     )
 
     def write(raw: Any, config: Config) -> Config:
@@ -145,7 +155,10 @@ def _options_picker(
     with gr.Row():
         load = gr.Button(f"Choose from the {list_name} list", size="sm", scale=0)
         picker = gr.Dropdown(
-            choices=[], label=f"{list_name.capitalize()}", visible=False
+            choices=[],
+            label=f"{list_name.capitalize()}",
+            visible=False,
+            interactive=True,
         )
     loaded: dict[str, dict[str, Any]] = {}
 
@@ -204,6 +217,7 @@ def _choice(
         choices=[(title, json.dumps(value)) for title, value in item.options],
         value=selected if selected in keys else None,
         label=item.label,
+        interactive=True,
     )
 
     def switch(key: str | None, config: Config, rev: int) -> tuple[Config, int]:
@@ -230,8 +244,12 @@ def _group(
             heading += f" — {group.description}"
         gr.Markdown(heading)
     if group.optional:
+        # Off means the key is absent: the library's own defaults, or the feature off, as
+        # the object's description says.
         switch = gr.Checkbox(
-            value=group.enabled, label=f"Use {group.title or group.path[-1]}"
+            value=group.enabled,
+            label=f"Configure {group.title or group.path[-1]}",
+            interactive=True,
         )
 
         def toggle(enabled: bool, config: Config, rev: int) -> tuple[Config, int]:
@@ -249,7 +267,11 @@ def _group(
     if group.options_list and not any(isinstance(i, FormChoice) for i in group.items):
         _options_picker(model, section, group.options_list, group.path, draft, revision)
     if advanced:
-        with gr.Accordion("Advanced", open=False):
+        # A nested object names its own block, so it is not read as the next heading's.
+        label = (
+            f"Advanced — {group.title or group.path[-1]}" if group.path else "Advanced"
+        )
+        with gr.Accordion(label, open=False):
             for item in advanced:
                 _item(model, section, item, draft, revision)
 

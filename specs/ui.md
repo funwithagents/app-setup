@@ -51,9 +51,9 @@ Every browser tab has its own draft of the config; the saved config, the secrets
 
 | Item | From | Drawn as |
 |---|---|---|
-| `FormGroup` | An object | Its title and description, its items, the advanced ones in a folded **Advanced** block; an optional object gets a **Use …** switch, and its items only when on |
+| `FormGroup` | An object | Its title and description, its items, the advanced ones in a folded **Advanced** block; an optional object gets a **Configure …** switch (off: the key is absent, so the library's defaults apply or the feature is off, as the object's description says), and its items only when on |
 | `FormChoice` | A `oneOf` | A dropdown of the modules; the selected module's fields follow the common ones |
-| `FormField` | A field | A text box, a number (whole for an integer), a checkbox, a dropdown for an `enum`, JSON text for an array |
+| `FormField` | A field | A text box, a number (whole for an integer) showing the default when the key is absent, a checkbox, a dropdown for an `enum`, JSON text for an array. A number with neither a value nor a default is a text box, since a number box cannot be empty |
 | `FormRaw` | A free-form object | JSON text |
 
 - A key written in the config itself (`x-secret`) is never drawn.
