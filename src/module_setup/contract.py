@@ -129,7 +129,9 @@ class FieldSpec:
     maximum: float | None = None
     exclusive_minimum: float | None = None
     exclusive_maximum: float | None = None
-    items: str | None = None  # the element type of an array
+    # The element type of an array: a scalar type, or "object" for a list of objects,
+    # which a form edits as raw JSON.
+    items: str | None = None
     advanced: bool = False
     secret_env: bool = False
     secret: bool = False
@@ -279,8 +281,15 @@ def _field(name: str, node: Mapping[str, Any], path: str) -> FieldSpec:
     items: str | None = None
     if types == ("array",):
         element = node.get("items")
-        if not isinstance(element, Mapping) or element.get("type") not in _SCALARS:
-            raise ContractError(f"{path}/items: an array holds scalars of one type")
+        if (
+            not isinstance(element, Mapping)
+            or set(element) != {"type"}
+            or element["type"] not in (*_SCALARS, "object")
+        ):
+            raise ContractError(
+                f"{path}/items: an array holds scalars of one type, or objects "
+                "(edited as raw JSON), stated as a single 'type'"
+            )
         items = element["type"]
     elif "items" in node:
         raise ContractError(f"{path}/items: only an array has items")

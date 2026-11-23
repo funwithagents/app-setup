@@ -80,13 +80,13 @@ The two must still agree. The conformance check (below) verifies what can be ver
 
 | Keyword | Use |
 |---|---|
-| `type` | `object`, `string`, `number`, `integer`, `boolean`, `array` (of scalars). A list adds `null` for a nullable field (`["string", "null"]`) and may combine scalar types for a field accepting several kinds (`["string", "integer", "null"]`: a device named or numbered) |
+| `type` | `object`, `string`, `number`, `integer`, `boolean`, `array`. A list adds `null` for a nullable field (`["string", "null"]`) and may combine scalar types for a field accepting several kinds (`["string", "integer", "null"]`: a device named or numbered) |
 | `properties`, `required` | An object's fields. A field not in `required` may be absent from the config |
 | `title`, `description` | The field's label and help text. `description` is required on every field, nested objects included |
 | `default` | The value the library uses when the field is absent. The form shows it and does not write it to the config unless the user changes it |
 | `enum` | A fixed set of values: a dropdown |
 | `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum` | Number bounds, shown and enforced by the form |
-| `items` | The scalar type of an array's elements |
+| `items` | The type of an array's elements, as a single `type`: a scalar type, or `object` for a list of objects, which the form edits as raw JSON (`validate` checks its content) |
 | `oneOf` | A choice between modules (below) |
 | `additionalProperties: true` | A free-form object (keyword arguments passed through to a provider): edited as raw JSON |
 
@@ -293,6 +293,6 @@ A section whose *library* is itself optional for the host (an app that installs 
 ## Open questions
 
 1. **Platform limits are derived, not declared.** A module that exists on one platform only (a model that runs on Apple silicon only) is recognised because its extra's requirements all carry a marker that is false here. If that proves too indirect, a library could state the marker itself in `describe`.
-2. **Fields that are lists of objects** (none in the first libraries' main fields) fall back to raw JSON. Drawing them is deferred.
+2. **Fields that are lists of objects** are edited as raw JSON. Drawing them as rows is deferred.
 3. **Async libraries.** `prepare`, `options` and `probe` are synchronous; a library whose only API is async wraps it. Revisit if that turns out awkward for a library built on asyncio.
 4. **A shared field-declaration helper.** Each library writes its own way of declaring a field once so that it both validates and emits the schema. A helper shared between libraries would spare them that, at the price of a runtime dependency this contract deliberately avoids.

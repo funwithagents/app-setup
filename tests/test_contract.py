@@ -219,6 +219,17 @@ def test_a_description_parses_into_the_objects_a_form_is_drawn_from():
     assert isinstance(passthrough, ObjectSpec) and passthrough.free_form
 
 
+def test_a_list_of_objects_is_a_field_edited_as_raw_json():
+    data = _description()
+    data["schema"]["properties"]["tags"]["items"] = {"type": "object"}
+
+    tags = next(
+        p for p in parse_description(data).schema.properties if p.name == "tags"
+    )
+
+    assert isinstance(tags, FieldSpec) and tags.items == "object"
+
+
 def test_the_discriminator_is_found_and_each_branch_keeps_its_own_fields():
     module = parse_description(_description()).schema.properties[0]
     assert isinstance(module, ObjectSpec) and module.choice is not None
@@ -302,8 +313,8 @@ REFUSALS = [
         "/schema/properties/tags/type",
     ),
     (
-        "an array of objects",
-        _broken(["schema", "properties", "tags", "items"], {"type": "object"}),
+        "an array of arrays",
+        _broken(["schema", "properties", "tags", "items"], {"type": "array"}),
         "/schema/properties/tags/items",
     ),
     (
