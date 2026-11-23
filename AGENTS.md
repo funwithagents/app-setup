@@ -15,7 +15,7 @@ Where things live. This is a coarse, module-level map — for the full file inve
 | `specs/` | Pre-implementation design docs, one per concept, each with a `**Status:**` — indexed by [specs/_index.md](specs/_index.md) |
 | `plans/` | Implementation plans turning settled specs into buildable steps — indexed by [plans/_index.md](plans/_index.md) |
 | `tests/` | Fast, deterministic, no-network tests; mirrors the `src/module_setup/` module structure (`tests/ui/` for the page); `fakes.py` is a small library implementing the contract |
-| `tests-e2e/` | Opt-in live tests that call real external services (not collected by default `pytest`) |
+| `tests-e2e/` | Opt-in live tests (not collected by default `pytest`): the page driven in a headless browser (`uv run --with playwright pytest tests-e2e -rs`, after `uv run --with playwright python -m playwright install chromium`) |
 
 ### `src/module_setup/` modules
 
@@ -94,7 +94,7 @@ After any code change, run linting, type checking, and tests, and fix any failur
 ```
 uv sync --dev
 uv run ruff check .
-uv run ruff format .
+uv run ruff format src tests tests-e2e   # code dirs only: `ruff format .` also reflows Python blocks in the specs
 uv run pyright
 uv run pytest
 ```

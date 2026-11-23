@@ -120,6 +120,10 @@ def _field(field: FormField, full: Path, draft: gr.State) -> None:
             interactive=True,
         )
     component.input(write, inputs=[component, draft], outputs=[draft])
+    if isinstance(component, gr.Textbox | gr.Number):
+        # Also on leaving the field: a value typed before the field's `input` listener is
+        # attached (right after a redraw) still reaches the config.
+        component.blur(write, inputs=[component, draft], outputs=[draft])
 
 
 def _raw(item: FormRaw, full: Path, draft: gr.State) -> None:
@@ -221,13 +225,21 @@ def _choice(
     )
 
     def switch(key: str | None, config: Config, rev: int) -> tuple[Config, int]:
-        if key not in keys:
+        node = get_at(config, (section, *item.path))
+        current = (
+            node.get(item.choice.discriminator) if isinstance(node, dict) else None
+        )
+        if key not in keys or keys[key] == current:
+            # Nothing to switch: gradio fires `input` again for the same choice, and a
+            # second redraw would replace the fields the user is already typing in.
             return config, rev
         return select_branch(
             config, (section, *item.path), item.choice, keys[key]
         ), rev + 1
 
-    dropdown.input(
+    # `select` fires once per choice; `input` fires twice, and each redraw replaces the
+    # fields, losing what is typed in between.
+    dropdown.select(
         switch, inputs=[dropdown, draft, revision], outputs=[draft, revision]
     )
     if item.options_list:
@@ -253,6 +265,8 @@ def _group(
         )
 
         def toggle(enabled: bool, config: Config, rev: int) -> tuple[Config, int]:
+            if (get_at(config, full) is not ABSENT) == enabled:
+                return config, rev  # already so: no redraw
             return toggle_group(config, full, enabled), rev + 1
 
         switch.input(

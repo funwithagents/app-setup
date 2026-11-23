@@ -8,6 +8,7 @@ tests:
   - tests/test_form.py
   - tests/ui/test_page.py
   - tests/ui/test_report.py
+  - tests-e2e/test_page_in_browser.py
 ---
 
 # UI
@@ -62,7 +63,7 @@ Every browser tab has its own draft of the config; the saved config, the secrets
 - **Switching module** (`select_branch`) keeps the fields common to every module and those the two modules share by name, and drops the old module's own.
 - **A named list** (`x-options` on a module or a field) gets a button that loads `options` and a dropdown whose choice writes its fields.
 
-A change of structure (a module switched, an optional object turned on or off, a choice from a list, revert, reset) draws the form again; a value edit does not, so typing never loses focus. Each section's problems are not drawn on the fields: **Check** lists them with their pointers.
+A change of structure (a module switched, an optional object turned on or off, a choice from a list, revert, reset) draws the form again; a value edit does not, so typing never loses focus. Choosing the module already selected, or switching an object to the state it is in, draws nothing. The module dropdown listens to `select`, which fires once per choice (`input` fires twice, and each redraw replaces the fields). A text or number field writes on `input` and again on `blur`, so a value typed right after a redraw, before the field's listeners are attached, still reaches the config. Every form component is explicitly interactive: gradio does not infer it for components drawn inside `gr.render`. Each section's problems are not drawn on the fields: **Check** lists them with their pointers.
 
 ## Reports
 
@@ -74,12 +75,11 @@ A change of structure (a module switched, an optional object turned on or off, a
 - `tests/ui/test_page.py`: the form drawn into a real gradio page (the selected module's fields, the hidden key, the list button, a section without its library); the page built with the app's own session content; the tab it opens on.
 - `tests/ui/test_report.py`: the wording of every report.
 
-Behaviour in a browser (events, the timer) is not covered by the fast tier.
+Behaviour in a browser is not covered by the fast tier: gradio's client cannot drive the per-browser draft. `tests-e2e/test_page_in_browser.py` drives the page in headless Chromium (Playwright, skipped when absent): switch module, type a required field, save; switch back, pick a voice from the list, save; the saved file is checked each time. It found that the form's fields were not interactive, and that a value typed right after a module switch was lost.
 
 ## Open questions
 
 1. **Problems on the fields themselves**, rather than in the Check report.
 2. **Lists of objects as rows** rather than JSON text.
 3. **Checking as one types**: today checks run on request, since `check_setup` imports providers.
-4. **A browser test** of the page in the live tier: gradio's client cannot drive the per-browser draft, so the form's events are not tested today.
-5. **The page's events are also gradio API endpoints**, saving a key included. The page listens on `127.0.0.1` by default; serving it on another address (`--host`) exposes them to that network. Hiding them, or adding authentication, is deferred.
+4. **The page's events are also gradio API endpoints**, saving a key included. The page listens on `127.0.0.1` by default; serving it on another address (`--host`) exposes them to that network. Hiding them, or adding authentication, is deferred.
