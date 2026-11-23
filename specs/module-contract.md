@@ -286,7 +286,7 @@ A library with nothing worth running for a config returns `ok: true` and says so
 
 A library that embeds another's config (a robot library carrying its voice's config) builds its contract from the other's: its schema places the embedded schema at that property, and its `required_extras`, `check_config`, `check_setup`, `prepare`, `options` and `probe` delegate for that part, re-rooting `path`s and keeping requirement strings as they are.
 
-A host does the same one level up: its app config is one section per library, and module-setup composes the sections' contracts (the `config-folder` and `ui` specs, planned). A host's own sections (settings no library owns) are described by a contract the host writes itself, in the same shape.
+A host does the same one level up: its app config is one section per library, and module-setup composes the sections' contracts ([config-folder.md](config-folder.md), [app.md](app.md)). A host's own sections (settings no library owns) are described by a contract the host writes itself, in the same shape.
 
 A section whose *library* is itself optional for the host (an app that installs its speech library only with one of its own extras) cannot be asked to describe itself until it is installed. Gating a whole section on a requirement is the host's declaration, not part of this contract.
 

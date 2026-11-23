@@ -1,12 +1,18 @@
-"""The page of an app: Setup, Secrets and Session tabs (specs/ui.md). Needs the ``ui`` extra.
+"""The Setup and Secrets panels, drawn with gradio inside an app's own page (specs/ui.md).
+Needs the ``ui`` extra.
 
-``launch(app)`` is an app's whole ``main()``: it reads ``--folder``, prepares the folder,
-loads the secrets, starts a session when autostart is on, and serves the page.
-``build_page(model)`` builds the page alone, for an app that serves it itself.
+```python
+model = AppModel(APP, ConfigFolder(default_folder(APP.name), APP.default_config))
+with gr.Blocks() as page:
+    with gr.Tab("Setup"):
+        setup = setup_panel(model)
+    with gr.Tab("Secrets"):
+        secrets_panel(model, setup.draft)
+```
 """
 
 from __future__ import annotations
 
-from module_setup.ui.page import build_page, launch
+from module_setup.ui.panels import SetupPanel, secrets_panel, setup_panel
 
-__all__ = ["build_page", "launch"]
+__all__ = ["SetupPanel", "secrets_panel", "setup_panel"]

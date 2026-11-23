@@ -1,4 +1,6 @@
-from collections.abc import Mapping
+import json
+import os
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -10,18 +12,8 @@ from module_setup.app import App, AppModel, InstallError, Problem, Section
 from module_setup.extras import RequirementStatus
 from module_setup.folder import ConfigFolder
 from module_setup.secrets import SecretStore, SecretVariable
-from module_setup.session import SessionContext, SessionState
 
 DEFAULTS = {"speech": {"module": {"type": "local-voice"}}}
-
-
-class Running:
-    def __init__(self, context: SessionContext) -> None:
-        self.context = context
-        self.stopped = False
-
-    def stop(self) -> None:
-        self.stopped = True
 
 
 @pytest.fixture
@@ -57,13 +49,13 @@ def _model(
     sections: tuple[Section, ...] | None = None,
     environ: dict[str, str] | None = None,
     defaults: Mapping[str, Any] = DEFAULTS,
+    locked: Callable[[], bool] | None = None,
 ) -> AppModel:
     app = App(
         name="talk",
         host="talk-app",
         sections=sections or (Section("speech", lib),),
         default_config=defaults,
-        start=Running,
     )
     folder = ConfigFolder(tmp_path, app.default_config)
     folder.ensure()
@@ -71,6 +63,7 @@ def _model(
         app,
         folder,
         SecretStore(folder.env_path, environ if environ is not None else {}),
+        locked,
     )
 
 
@@ -156,7 +149,7 @@ def test_files_are_prepared_then_ready(tmp_path: Path, lib: SpeechLib) -> None:
     assert progress == [{"id": "weights:Ada", "fraction": 1.0, "message": "done"}]
 
 
-def test_a_section_the_config_does_not_use_is_neither_checked_nor_started(
+def test_a_section_the_config_does_not_use_is_neither_checked_nor_run(
     tmp_path: Path, lib: SpeechLib
 ) -> None:
     robot = SpeechLib()
@@ -169,7 +162,7 @@ def test_a_section_the_config_does_not_use_is_neither_checked_nor_started(
 
     assert model.used(config) == ["speech"]
     assert model.check_config(config) == []
-    assert model.session_config(config) == {"speech": config["speech"]}
+    assert model.used_config(config) == {"speech": config["speech"]}
     assert model.used({**config, "body": "robot"}) == ["speech", "robot"]
 
 
@@ -246,68 +239,57 @@ def test_the_secrets_the_config_names_and_where_they_come_from(
     assert model.secret_variables(DEFAULTS) == []
 
 
-def test_a_session_starts_with_the_saved_config_of_the_used_sections(
+def test_building_the_model_makes_the_folder_ready_and_loads_its_secrets(
+    tmp_path: Path, lib: SpeechLib, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    environ = {"CLOUD_VOICE_KEY": "from shell", "HOME": "/home/me"}
+    monkeypatch.setattr(os, "environ", environ)
+    folder = ConfigFolder(tmp_path / "talk", DEFAULTS)
+    (tmp_path / "talk").mkdir()
+    folder.env_path.write_text('CLOUD_VOICE_KEY="from file"\nOTHER_KEY="secret"\n')
+
+    model = AppModel(
+        App("talk", "talk-app", (Section("speech", lib),), DEFAULTS), folder
+    )
+
+    assert json.loads(folder.config_path.read_text()) == DEFAULTS
+    assert environ["OTHER_KEY"] == "secret"  # the libraries read it from there
+    assert environ["CLOUD_VOICE_KEY"] == "from shell"  # the shell wins
+    assert model.saved_config() == DEFAULTS
+
+
+def test_blockers_say_why_the_config_cannot_run_yet(
     tmp_path: Path, lib: SpeechLib
 ) -> None:
+    model = _model(tmp_path, lib)
+
+    assert model.blockers(DEFAULTS) == ["speech: Voice Ada — Not downloaded yet."]
+    assert model.blockers({"speech": {"module": {"type": "cloud-voice"}}})[0] == (
+        "/speech/module/voice_id: voice_id is required"
+    )
+
     lib.downloaded.add("Ada")
-    model = _model(tmp_path, lib)
-
-    assert model.start() == []
-    assert model.runner.wait(5) is SessionState.RUNNING
-    session = model.runner.session
-    assert isinstance(session, Running)
-    assert session.context.config == DEFAULTS
-    assert session.context.folder == tmp_path
-
-    model.stop()
-    model.runner.wait(5)
-    assert session.stopped
+    assert model.blockers(DEFAULTS) == []
 
 
-def test_a_session_does_not_start_while_something_is_missing(
+def test_the_config_cannot_change_while_the_app_locks_it(
     tmp_path: Path, lib: SpeechLib
 ) -> None:
-    model = _model(tmp_path, lib)
-
-    blockers = model.start()
-
-    assert blockers == ["speech: Voice Ada — Not downloaded yet."]
-    assert model.runner.state is SessionState.STOPPED
-
-
-def test_the_config_cannot_change_while_a_session_runs(
-    tmp_path: Path, lib: SpeechLib
-) -> None:
-    lib.downloaded.add("Ada")
-    model = _model(tmp_path, lib)
-    model.start()
-    model.runner.wait(5)
+    running = [True]
+    model = _model(tmp_path, lib, locked=lambda: running[0])
+    cloud = {"speech": {"module": {"type": "cloud-voice"}}}
 
     with pytest.raises(RuntimeError, match="Stop the session"):
-        model.save({"speech": {"module": {"type": "cloud-voice"}}})
+        model.save(cloud)
     with pytest.raises(RuntimeError, match="Stop the session"):
         model.reset()
+    assert model.saved_config() == DEFAULTS
 
-    model.stop()
-    model.runner.wait(5)
-    model.save({"speech": {"module": {"type": "cloud-voice"}}})
-    assert model.saved_config() == {"speech": {"module": {"type": "cloud-voice"}}}
-
-
-def test_autostart_starts_only_when_the_settings_ask(
-    tmp_path: Path, lib: SpeechLib
-) -> None:
-    lib.downloaded.add("Ada")
-    model = _model(tmp_path, lib)
-
-    assert model.autostart() == []
-    assert model.runner.state is SessionState.STOPPED
-
-    model.set_autostart(True)
-    assert model.autostart() == []
-    assert model.runner.wait(5) is SessionState.RUNNING
-    model.stop()
-    model.runner.wait(5)
+    running[0] = False
+    model.save(cloud)
+    assert model.saved_config() == cloud
+    assert model.reset() == DEFAULTS
+    assert not _model(tmp_path, lib).locked()  # no lock given: never locked
 
 
 def test_probe_and_options_reach_the_section_s_contract(

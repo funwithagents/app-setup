@@ -1,38 +1,33 @@
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import gradio as gr
-import pytest
 from fakes import SpeechLib
 from gradio.components import Component
 
 from module_setup.app import App, AppModel, Section
 from module_setup.folder import ConfigFolder
 from module_setup.secrets import SecretStore
-from module_setup.session import SessionRunner
-from module_setup.ui import build_page
+from module_setup.ui import secrets_panel, setup_panel
 from module_setup.ui.form import render_sections
+from module_setup.ui.panels import LOCKED
 
 DEFAULTS = {"speech": {"module": {"type": "local-voice"}}}
 
 
-class _Session:
-    def stop(self) -> None:
-        pass
-
-
-def _model(tmp_path: Path, **app: Any) -> AppModel:
+def _model(
+    tmp_path: Path, locked: Callable[[], bool] | None = None, **app: Any
+) -> AppModel:
     application = App(
         name="talk",
         host="talk-app",
         sections=app.pop("sections", (Section("speech", SpeechLib()),)),
         default_config=DEFAULTS,
-        start=lambda context: _Session(),
         **app,
     )
     folder = ConfigFolder(tmp_path, DEFAULTS)
-    folder.ensure()
-    return AppModel(application, folder, SecretStore(folder.env_path, {}))
+    return AppModel(application, folder, SecretStore(folder.env_path, {}), locked)
 
 
 def _drawn(model: AppModel, config: dict[str, Any]) -> list[Any]:
@@ -97,28 +92,61 @@ def test_a_section_without_its_library_says_what_to_install(tmp_path: Path) -> N
     assert any("the `speech` extra" in text for text in markdown)
 
 
-def test_the_page_builds_with_the_app_s_session_content(tmp_path: Path) -> None:
-    built: list[SessionRunner] = []
+def _handler(page: gr.Blocks, name: str) -> Callable[..., Any]:
+    """The function a panel registered under *name* (for one event or several), to call as
+    gradio would."""
+    found = {f.fn for f in page.fns.values() if getattr(f.fn, "__name__", "") == name}
+    assert len(found) == 1, found
+    fn = found.pop()
+    assert fn is not None
+    return fn
 
-    def session_ui(runner: SessionRunner) -> None:
-        built.append(runner)
-        gr.Textbox(label="Say")
 
-    model = _model(tmp_path, session_ui=session_ui)
+def test_the_panels_are_drawn_where_the_app_puts_them(tmp_path: Path) -> None:
+    model = _model(tmp_path)
 
-    page = build_page(model, selected="session")
+    with gr.Blocks() as page:
+        with gr.Tab("Talk"):
+            gr.Textbox(label="Say")
+        with gr.Tab("Setup"):
+            setup = setup_panel(model)
+        with gr.Tab("Keys"):
+            secrets_panel(model, setup.draft)
 
-    assert built == [model.runner]
+    tabs = [b.label for b in page.blocks.values() if isinstance(b, gr.Tab)]
     labels = _labels(list(page.blocks.values()))
-    assert "Say" in labels and "Variable" in labels and "Output" in labels
+    assert tabs == ["Talk", "Setup", "Keys"]  # the app's tabs, and only those
+    assert "Say" in labels and "Section to test" in labels and "Variable" in labels
+    assert isinstance(setup.draft, gr.State) and isinstance(setup.saved, gr.State)
 
 
-@pytest.mark.parametrize("selected", ["setup", "secrets", "session"])
-def test_the_page_opens_on_any_tab(tmp_path: Path, selected: str) -> None:
-    tabs = [
-        b
-        for b in build_page(_model(tmp_path), selected=selected).blocks.values()
-        if isinstance(b, gr.Tabs)
-    ]
+def test_the_setup_panel_greys_save_and_reset_while_the_app_locks_the_config(
+    tmp_path: Path,
+) -> None:
+    running = [False]
+    with gr.Blocks() as page:
+        setup_panel(_model(tmp_path, locked=lambda: running[0]))
+    tick = _handler(page, "on_tick")
 
-    assert tabs[0].selected == selected
+    assert tick()[0] == ""
+    running[0] = True
+    note, save, reset = tick()
+    assert note == LOCKED
+    assert save["interactive"] is False and reset["interactive"] is False
+
+
+def test_the_secrets_panel_reads_the_config_it_follows_else_the_saved_one(
+    tmp_path: Path,
+) -> None:
+    model = _model(tmp_path)
+    cloud = {"speech": {"module": {"type": "cloud-voice", "voice_id": "v"}}}
+
+    with gr.Blocks() as following:
+        secrets_panel(model, gr.State(cloud))
+    with gr.Blocks() as alone:
+        secrets_panel(model)
+
+    assert "`CLOUD_VOICE_KEY`" in _handler(following, "report")(cloud)
+    assert "names no environment variable" in _handler(alone, "report")()
+    model.save(cloud)
+    assert "`CLOUD_VOICE_KEY`" in _handler(alone, "report")()

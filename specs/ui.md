@@ -2,13 +2,13 @@
 code:
   - src/module_setup/form.py
   - src/module_setup/ui/form.py
-  - src/module_setup/ui/page.py
+  - src/module_setup/ui/panels.py
   - src/module_setup/ui/report.py
 tests:
   - tests/test_form.py
-  - tests/ui/test_page.py
+  - tests/ui/test_panels.py
   - tests/ui/test_report.py
-  - tests-e2e/test_page_in_browser.py
+  - tests-e2e/test_panels_in_browser.py
 ---
 
 # UI
@@ -17,34 +17,52 @@ tests:
 
 ## Purpose
 
-The page every app gets: a Setup tab to edit, check and install, a Secrets tab for keys, and a Session tab to start, use and stop the runtime. It is drawn with gradio, behind the `ui` extra; everything it decides comes from the gradio-free model ([app.md](app.md)), so a library that only needs the contract's conformance check never installs gradio.
+Two panels an app draws in its own page: a **Setup** panel to edit, check and install, and a **Secrets** panel for keys. The app decides which it shows and where (a tab, a column, an accordion), and builds the rest of its page itself, its session first of all: starting, using and stopping the runtime differ from one app to the next. The panels are drawn with gradio, behind the `ui` extra; everything they decide comes from the gradio-free model ([app.md](app.md)), so a library that only needs the contract's conformance check never installs gradio.
 
-## Launching
+## Using the panels
 
 ```python
-from module_setup.app import App, Section
-from module_setup.ui import launch
+import gradio as gr
 
-launch(App(...))
+from module_setup.app import AppModel
+from module_setup.folder import ConfigFolder, default_folder
+from module_setup.ui import secrets_panel, setup_panel
+
+model = AppModel(APP, ConfigFolder(default_folder(APP.name), APP.default_config), locked=session.running)
+
+with gr.Blocks() as page:
+    with gr.Tab("Session"):
+        ...                                   # the app's own: Start, Stop, its controls
+    with gr.Tab("Setup"):
+        setup = setup_panel(model)
+    with gr.Tab("Secrets"):
+        secrets_panel(model, setup.draft)
+
+page.launch()
 ```
 
-`launch(app, argv=None, **launch_options)` is an app's whole `main()`. It reads `--folder`, `--host` (default `127.0.0.1`), `--port` and `--no-autostart`; prepares the folder ([config-folder.md](config-folder.md)); loads the secrets ([secrets.md](secrets.md)); autostarts ([session.md](session.md)); serves the page; and stops the session when the page stops. `build_page(model, selected="setup")` builds the page alone, for an app that serves it itself.
+Each panel is a function drawing its components where it is called, inside the app's `gr.Blocks`. It brings its own state, its own events and its own page-load step (a `gr.on` with no trigger), so either can be used alone, and nothing has to be wired between them except what the app chooses.
 
-## The page
+Serving the page, the command line, when to start a session (a setting of the app's to start one at launch, for instance) and stopping it at exit are the app's.
 
-A title, the session's state (refreshed every second), and three tabs.
+## The panels
 
-**Setup**
+**`setup_panel(model) -> SetupPanel`**
 
-- **Save**, **Revert to saved**, **Reset to defaults** (save and reset are disabled while a session runs), and the autostart switch.
+- **Save**, **Revert to saved**, **Reset to defaults**. Save and Reset are disabled, with a line saying a session is running, while the model is locked (`AppModel.locked`, polled every second).
 - **The form**: one group per section the config uses.
 - **Checks**: **Check** shows the config's problems and a table of what the machine is missing; **Install missing extras** installs the host extras that carry them, streaming uv's output; **Download missing files** runs `prepare`, streaming its progress; **Test** runs one section's `probe`. All four act on the form's current values, saved or not.
 
-**Secrets**: the variables the config names, each with its source; a name and a password field to write one to the folder's `.env`, or remove it. Values are never shown.
+It returns what the app can listen to:
 
-**Session**: **Start** and **Stop**, the state, why a start was refused, then the app's own content (`App.session_ui`), drawn once inside the tab and given the runner: its handlers reach the running session through `runner.session`.
+| Field | What it is |
+|---|---|
+| `draft` | A `gr.State` holding the config being edited in this browser tab: an input for the app's own events |
+| `saved` | A `gr.State` that changes each time the panel saves or resets the config: `setup.saved.change(...)` follows the saved config |
 
-Every browser tab has its own draft of the config; the saved config, the secrets and the session are the model's, shared by all.
+**`secrets_panel(model, config=None)`**: the variables the config names, each with its source; a name and a password field to write one to the folder's `.env`, or remove it. Values are never shown. Given a `gr.State` (a Setup panel's `draft`), it reads the variables from it and follows each change, so the key a newly chosen module needs appears at once; without one, it reads the saved config, on page load and on **Refresh**.
+
+Every browser tab has its own draft of the config; the saved config and the secrets are the model's, shared by all.
 
 ## The form
 
@@ -67,19 +85,19 @@ A change of structure (a module switched, an optional object turned on or off, a
 
 ## Reports
 
-`module_setup.ui.report` writes the model's answers as Markdown: the problems with their pointers, the setup table (section, item, status, detail, and what to do: the host extra to install, or "Prepare downloads it"), the secrets table, and the session line.
+`module_setup.ui.report` writes the model's answers as Markdown: the problems with their pointers, the setup table (section, item, status, detail, and what to do: the host extra to install, or "Prepare downloads it"), and the secrets table.
 
 ## Testing
 
 - `tests/test_form.py`: the tree for each kind of item; every coercion and every refusal; writing, creating and removing; switching module; optional objects; the variables a config names.
-- `tests/ui/test_page.py`: the form drawn into a real gradio page (the selected module's fields, the hidden key, the list button, a section without its library); the page built with the app's own session content; the tab it opens on.
+- `tests/ui/test_panels.py`: the form drawn into a real gradio page (the selected module's fields, the hidden key, the list button, a section without its library); both panels drawn in an app's own tabs, next to its own components; Save and Reset disabled while the app locks the config; the Secrets panel reading the config it follows, else the saved one.
 - `tests/ui/test_report.py`: the wording of every report.
 
-Behaviour in a browser is not covered by the fast tier: gradio's client cannot drive the per-browser draft. `tests-e2e/test_page_in_browser.py` drives the page in headless Chromium (Playwright, skipped when absent): switch module, type a required field, save; switch back, pick a voice from the list, save; the saved file is checked each time. It found that the form's fields were not interactive, and that a value typed right after a module switch was lost.
+Behaviour in a browser is not covered by the fast tier: gradio's client cannot drive the per-browser draft. `tests-e2e/test_panels_in_browser.py` drives the panels in headless Chromium (Playwright, skipped when absent), inside an app's page where they are not the first tab: switch module, type a required field, save; switch back, pick a voice from the list, save; the saved file is checked each time. Then the Secrets panel lists the key the unsaved draft names, and Save is disabled while the app's session runs and enabled once it stops. It found that the form's fields were not interactive, and that a value typed right after a module switch was lost.
 
 ## Open questions
 
 1. **Problems on the fields themselves**, rather than in the Check report.
 2. **Lists of objects as rows** rather than JSON text.
 3. **Checking as one types**: today checks run on request, since `check_setup` imports providers.
-4. **The page's events are also gradio API endpoints**, saving a key included. The page listens on `127.0.0.1` by default; serving it on another address (`--host`) exposes them to that network. Hiding them, or adding authentication, is deferred.
+4. **The panels' events are also gradio API endpoints**, saving a key included. Where the page listens is the app's choice: on another address than `127.0.0.1`, they are exposed to that network. Hiding them, or adding authentication, is deferred.

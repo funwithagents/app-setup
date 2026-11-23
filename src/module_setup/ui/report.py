@@ -5,17 +5,14 @@ Pure functions from the model's answers to text, so the wording is tested withou
 
 from __future__ import annotations
 
-import time
 from collections.abc import Sequence
 
 from module_setup.app import Problem, SetupItem
 from module_setup.secrets import SecretVariable
-from module_setup.session import SessionRunner, SessionState
 
 __all__ = [
     "config_report",
     "secrets_report",
-    "session_report",
     "setup_report",
 ]
 
@@ -72,21 +69,3 @@ def secrets_report(variables: Sequence[tuple[SecretVariable, Sequence[str]]]) ->
             f"| {', '.join(f'`{p}`' for p in pointers)} |"
         )
     return "\n".join(lines)
-
-
-def session_report(runner: SessionRunner, now: float | None = None) -> str:
-    state = runner.state
-    if state is SessionState.RUNNING:
-        started = runner.started_at or time.time()
-        elapsed = int((now if now is not None else time.time()) - started)
-        sections = ", ".join(runner.context.config) if runner.context else ""
-        return f"🟢 **Running** for {elapsed} s — sections: {sections}"
-    if state is SessionState.STARTING:
-        return "🟡 **Starting…**"
-    if state is SessionState.STOPPING:
-        return "🟡 **Stopping…**"
-    if state is SessionState.FAILED:
-        return f"🔴 **Failed to start:** {runner.error}"
-    if runner.error:
-        return f"⚪ **Stopped** (the last stop reported: {runner.error})"
-    return "⚪ **Stopped**"

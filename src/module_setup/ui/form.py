@@ -1,6 +1,6 @@
 """The Setup tab's form, drawn from a section's schema (specs/ui.md, "The form").
 
-Called inside the page's ``gr.render``: each section's ``FormGroup`` (module_setup.form)
+Called inside the Setup panel's ``gr.render``: each section's ``FormGroup`` (module_setup.form)
 becomes components whose events write to the page's draft config. A change of structure (a
 module switched, an optional object turned on or off, a voice chosen from a list) also bumps
 the page's revision, which draws the form again; a plain value edit does not, so typing never

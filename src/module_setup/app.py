@@ -1,9 +1,9 @@
-"""An app made of sections, and what its Setup and Session tabs do (specs/app.md).
+"""An app made of sections, and what its Setup and Secrets panels do (specs/app.md).
 
-An ``App`` declares its sections (one library's contract each), its default config, and the
-function that starts a session. ``AppModel`` is everything the page does, with no gradio:
-read and save the config, check it section by section, tell what the machine is missing and
-which of the host's extras installs it, install, prepare, probe, and start or stop a session.
+An ``App`` declares its sections (one library's contract each) and its default config.
+``AppModel`` is everything the panels do, with no gradio: read and save the config, check it
+section by section, tell what the machine is missing and which of the host's extras installs
+it, install, prepare, probe, and say why the config cannot run yet. Running it is the app's.
 """
 
 from __future__ import annotations
@@ -12,14 +12,14 @@ import copy
 import threading
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from module_setup.contract import Description, SetupContract, parse_description
 from module_setup.extras import find_installer, host_extras, requirement_status
-from module_setup.folder import ConfigFolder, Settings
+from module_setup.folder import ConfigFolder
 from module_setup.form import pointer, secret_variables
 from module_setup.secrets import SecretStore, SecretVariable
-from module_setup.session import SessionContext, SessionRunner, StartFunction
 
 __all__ = [
     "App",
@@ -41,7 +41,7 @@ class Section:
     *contract* may be a function returning it, for a library the host installs only with one
     of its own extras: the section then shows that extra (*host_extra*) as missing until the
     import succeeds. *when*, given the whole config, says whether the section is used (a
-    section for one embodiment only); an unused section is not checked and not started.
+    section for one embodiment only); an unused section is neither drawn nor checked.
     """
 
     name: str
@@ -53,17 +53,13 @@ class Section:
 
 @dataclass(frozen=True)
 class App:
-    """What an app declares to get a Setup page and a Session tab."""
+    """What an app declares to get its Setup and Secrets panels."""
 
-    name: str  # the folder's name, and the page's title unless *title* is given
+    name: str  # the folder's default name, and the app's title unless *title* is given
     host: str  # the distribution the environment is installed from
     sections: tuple[Section, ...]
     default_config: Mapping[str, Any]
-    start: StartFunction
     title: str | None = None
-    # Builds the Session tab's own content, inside it, at page build (gradio): given the
-    # runner, whose `session` is the running session's object or None.
-    session_ui: Callable[[SessionRunner], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -131,19 +127,29 @@ class _Loaded:
 
 
 class AppModel:
-    """The app's state and actions, shared by every browser tab on the page."""
+    """The app's state and actions, shared by every browser tab on the page.
+
+    Building it makes the folder ready (created, the default config written when there is
+    none). Without *secrets*, it opens the folder's ``.env`` over ``os.environ`` and loads
+    it, so the libraries find their keys. *locked*, the app's, says when the config is in
+    use (a session running): saving and resetting are refused then.
+    """
 
     def __init__(
         self,
         app: App,
         folder: ConfigFolder,
         secrets: SecretStore | None = None,
-        runner: SessionRunner | None = None,
+        locked: Callable[[], bool] | None = None,
     ) -> None:
         self.app = app
         self.folder = folder
-        self.secrets = secrets or SecretStore(folder.env_path)
-        self.runner = runner or SessionRunner(app.start)
+        folder.ensure()
+        if secrets is None:
+            secrets = SecretStore(folder.env_path)
+            secrets.load()
+        self.secrets = secrets
+        self._locked = locked
         self._loaded = {section.name: _Loaded(section) for section in app.sections}
         self._lock = threading.Lock()
 
@@ -179,27 +185,37 @@ class AppModel:
             if section.when is None or section.when(config)
         ]
 
-    # --- The config and the settings.
+    @property
+    def path(self) -> Path:
+        """The app's folder: where a section's relative paths resolve."""
+        return self.folder.path
+
+    # --- The config.
+
+    def locked(self) -> bool:
+        """Whether the app is using the saved config (a session running)."""
+        return self._locked is not None and self._locked()
 
     def saved_config(self) -> dict[str, Any]:
         return self.folder.read_config()
 
     def save(self, config: Mapping[str, Any]) -> None:
-        """Save *config* as the current one. Refused while a session runs."""
-        if not self.runner.idle:
-            raise RuntimeError("Stop the session before changing its config.")
+        """Save *config* as the current one. Refused while the config is locked."""
+        self._refuse_when_locked()
         self.folder.save_config(config)
 
     def reset(self) -> dict[str, Any]:
-        if not self.runner.idle:
-            raise RuntimeError("Stop the session before changing its config.")
+        """Save the app's default config as the current one, and return it."""
+        self._refuse_when_locked()
         return self.folder.reset_config()
 
-    def settings(self) -> Settings:
-        return self.folder.read_settings()
+    def _refuse_when_locked(self) -> None:
+        if self.locked():
+            raise RuntimeError("Stop the session before changing its config.")
 
-    def set_autostart(self, autostart: bool) -> None:
-        self.folder.save_settings(Settings(autostart=autostart))
+    def used_config(self, config: Mapping[str, Any]) -> dict[str, Any]:
+        """The documents of the sections *config* uses: what the app runs with."""
+        return {name: copy.deepcopy(config.get(name)) for name in self.used(config)}
 
     # --- Checking.
 
@@ -281,8 +297,9 @@ class AppModel:
             host_extras=carriers,
         )
 
-    def start_blockers(self, config: Mapping[str, Any]) -> list[str]:
-        """Why a session cannot start with *config*, in words; empty when it can."""
+    def blockers(self, config: Mapping[str, Any]) -> list[str]:
+        """Why *config* cannot run on this machine yet, in words; empty when it can: its
+        problems, then every missing item. An `unknown` item does not block."""
         reasons = [f"{p.path}: {p.message}" for p in self.check_config(config)]
         reasons += [
             f"{item.section}: {item.title} — {item.detail}"
@@ -376,31 +393,3 @@ class AppModel:
             (variable, named[variable.name])
             for variable in self.secrets.variables(named)
         ]
-
-    # --- The session.
-
-    def session_config(self, config: Mapping[str, Any]) -> dict[str, Any]:
-        """The documents of the sections *config* uses: what a session starts with."""
-        return {name: copy.deepcopy(config.get(name)) for name in self.used(config)}
-
-    def start(self) -> list[str]:
-        """Start a session with the saved config; the reasons it cannot, else []."""
-        config = self.saved_config()
-        blockers = self.start_blockers(config)
-        if blockers:
-            return blockers
-        if not self.runner.start(
-            SessionContext(config=self.session_config(config), folder=self.folder.path)
-        ):
-            return ["A session is already running."]
-        return []
-
-    def stop(self) -> bool:
-        return self.runner.stop()
-
-    def autostart(self) -> list[str]:
-        """Start a session when the settings ask for it; the reasons it did not start (empty
-        when it started or was not asked to)."""
-        if not self.settings().autostart:
-            return []
-        return self.start()

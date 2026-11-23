@@ -1,12 +1,8 @@
-from pathlib import Path
-
 from module_setup.app import Problem, SetupItem
 from module_setup.secrets import SecretVariable
-from module_setup.session import SessionContext, SessionRunner, SessionState
 from module_setup.ui.report import (
     config_report,
     secrets_report,
-    session_report,
     setup_report,
 )
 
@@ -72,29 +68,3 @@ def test_the_secrets_table_names_each_source() -> None:
     assert "| `A` | ✅ the shell | `/s/module/api_key_env` |" in text
     assert "| `B` | ❌ not set | `/s/x`, `/t/y` |" in text
     assert "names no environment variable" in secrets_report([])
-
-
-class _Session:
-    def stop(self) -> None:
-        pass
-
-
-def test_the_session_line_follows_the_runner() -> None:
-    runner = SessionRunner(lambda context: _Session())
-    assert session_report(runner) == "⚪ **Stopped**"
-
-    runner.start(SessionContext(config={"speech": {}, "robot": {}}, folder=Path(".")))
-    assert runner.wait(5) is SessionState.RUNNING
-    started = runner.started_at or 0.0
-    assert (
-        session_report(runner, now=started + 12)
-        == "🟢 **Running** for 12 s — sections: speech, robot"
-    )
-
-    def fail(context: SessionContext) -> _Session:
-        raise RuntimeError("no device")
-
-    failed = SessionRunner(fail)
-    failed.start(SessionContext(config={}, folder=Path(".")))
-    failed.wait(5)
-    assert session_report(failed) == "🔴 **Failed to start:** no device"

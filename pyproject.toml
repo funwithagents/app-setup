@@ -1,7 +1,7 @@
 [project]
 name = "module-setup"
 version = "0.1.0"
-description = "The Setup side of a module-based app: choose a module, edit its config from its schema, install its extra, prepare what it needs, then start a session."
+description = "The Setup side of a module-based app: choose a module, edit its config from its schema, install its extra, prepare what it needs, manage its keys."
 readme = "README.md"
 authors = [
     { name = "Thibault Hervier", email = "thibault@fr2g.io" }
@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# The page: the Setup, Secrets and Session tabs drawn with gradio (specs/ui.md). The base
+# The Setup and Secrets panels, drawn with gradio in an app's page (specs/ui.md). The base
 # install decides everything and draws nothing, so a library that only runs the conformance
 # check in its tests never installs gradio.
 ui = [
