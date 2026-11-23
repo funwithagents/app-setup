@@ -293,7 +293,7 @@ def _field(name: str, node: Mapping[str, Any], path: str) -> FieldSpec:
         items = element["type"]
     elif "items" in node:
         raise ContractError(f"{path}/items: only an array has items")
-    numeric = all(t in _NUMERIC for t in types)
+    numeric = any(t in _NUMERIC for t in types)
     bounds: dict[str, float | None] = {}
     for key in _BOUNDS:
         value = node.get(key)
@@ -302,7 +302,9 @@ def _field(name: str, node: Mapping[str, Any], path: str) -> FieldSpec:
             or isinstance(value, bool)
             or not isinstance(value, (int, float))
         ):
-            raise ContractError(f"{path}/{key}: a numeric bound on a numeric field")
+            raise ContractError(
+                f"{path}/{key}: a numeric bound on a field that accepts a number"
+            )
         bounds[key] = value
     enum = node.get("enum")
     if enum is not None and (not isinstance(enum, list) or not enum):

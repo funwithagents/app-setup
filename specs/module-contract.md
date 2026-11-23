@@ -85,7 +85,7 @@ The two must still agree. The conformance check (below) verifies what can be ver
 | `title`, `description` | The field's label and help text. `description` is required on every field, nested objects included |
 | `default` | The value the library uses when the field is absent. The form shows it and does not write it to the config unless the user changes it |
 | `enum` | A fixed set of values: a dropdown |
-| `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum` | Number bounds, shown and enforced by the form |
+| `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum` | Number bounds, shown and enforced by the form. On a field accepting several kinds they apply to its numeric values |
 | `items` | The type of an array's elements, as a single `type`: a scalar type, or `object` for a list of objects, which the form edits as raw JSON (`validate` checks its content) |
 | `oneOf` | A choice between modules (below) |
 | `additionalProperties: true` | A free-form object (keyword arguments passed through to a provider): edited as raw JSON |

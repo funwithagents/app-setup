@@ -219,6 +219,17 @@ def test_a_description_parses_into_the_objects_a_form_is_drawn_from():
     assert isinstance(passthrough, ObjectSpec) and passthrough.free_form
 
 
+def test_a_bound_on_a_field_of_several_kinds_applies_to_its_numbers():
+    data = _description()
+    data["schema"]["properties"]["device"]["minimum"] = 0
+
+    device = next(
+        p for p in parse_description(data).schema.properties if p.name == "device"
+    )
+
+    assert isinstance(device, FieldSpec) and device.minimum == 0
+
+
 def test_a_list_of_objects_is_a_field_edited_as_raw_json():
     data = _description()
     data["schema"]["properties"]["tags"]["items"] = {"type": "object"}
@@ -318,9 +329,9 @@ REFUSALS = [
         "/schema/properties/tags/items",
     ),
     (
-        "a bound on a string",
-        _broken(["schema", "properties", "device", "minimum"], 0),
-        "/schema/properties/device/minimum",
+        "a bound on a field that takes no number",
+        _broken(["schema", "properties", "tags", "minimum"], 0),
+        "/schema/properties/tags/minimum",
     ),
     (
         "a secret that is not a string",
