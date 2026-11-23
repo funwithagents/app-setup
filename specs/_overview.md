@@ -42,13 +42,14 @@ For the config being edited, in this order, each step gating the next:
 
 Outside the sequence, `probe` runs one section for real on request (a Test button): it tells which section of an app is broken without starting the others.
 
-## Planned specs
+## The specs
 
-The contract is drafted first because every library builds against it. The others follow, in this order:
-
-| Spec | What it will cover |
+| Spec | What it covers |
 |---|---|
-| config-folder | The app's folder: the default config, the current config, the settings (autostart) |
-| secrets | The environment variables a config references, where each comes from (shell, the folder's `.env`), storing one |
-| session | The Start/Stop state machine, the config locked during a session, autostart |
-| ui | The Gradio pieces: the form rendered from a schema, the Setup, Secrets and Session tabs, the page |
+| [module-contract.md](module-contract.md) | What a library implements |
+| [extras.md](extras.md) | Whether an extra is installed, which host extra carries it, the install |
+| [app.md](app.md) | What an app declares (its sections, its default config, its start) and the model behind its page |
+| [config-folder.md](config-folder.md) | The app's folder: the current config, the settings, the secrets file |
+| [secrets.md](secrets.md) | The keys: where each comes from, the `.env` |
+| [session.md](session.md) | Start, Stop, the config locked while running, autostart |
+| [ui.md](ui.md) | The page: the form drawn from a schema, the Setup, Secrets and Session tabs, `launch` |

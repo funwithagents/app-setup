@@ -12,6 +12,7 @@ Implementation plans for module-setup — each plan turns a settled part of a sp
 | [202611231640_probe.md](202611231640_probe.md) | `probe`, the contract's seventh function ([specs/module-contract.md](../specs/module-contract.md)): in the `SetupContract` protocol, and its presence checked by `check_contract` | Done |
 | [202611231800_extras.md](202611231800_extras.md) | Requirements against the installed environment ([specs/extras.md](../specs/extras.md)): `requirement_status`, `host_extras`, `find_installer` and `Installer` | Done |
 | [202611231950_contract-names-and-check-setup.md](202611231950_contract-names-and-check-setup.md) | Explicit names for the contract's functions (`config_schema`, `required_extras`, `check_config`, `check_setup`) and `check_setup` covering extras and keys ([specs/module-contract.md](../specs/module-contract.md)) | Done |
+| [202611232100_app-and-page.md](202611232100_app-and-page.md) | The app and its page ([specs/app.md](../specs/app.md), [specs/config-folder.md](../specs/config-folder.md), [specs/secrets.md](../specs/secrets.md), [specs/session.md](../specs/session.md), [specs/ui.md](../specs/ui.md)): `App`/`AppModel`, the folder, the secrets, the session runner, the form, and the Setup, Secrets and Session tabs behind the `ui` extra | Done |
 | _(add plans here — see [_plan-template.md](_plan-template.md))_ | | |
 
 ## Status legend
