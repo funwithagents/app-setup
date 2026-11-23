@@ -26,19 +26,19 @@ module-setup is the shared code that turns it into a page. Every app built on su
 
 ## Who does what
 
-- **A library declares.** It implements the contract ([module-contract.md](module-contract.md)): it describes its config as a schema, says which requirements a config has, validates a config, checks its items and prepares them. It imports nothing from module-setup and returns plain data.
-- **module-setup acts.** It renders the form from the schema, checks whether a requirement is installed from package metadata, maps it to the host's own extra and installs it with uv, stores secrets, keeps the config folder, and runs the Start/Stop state machine.
+- **A library declares.** It implements the contract ([module-contract.md](module-contract.md)): it describes its config as a schema, says which extras a config needs, checks the config itself, checks what this machine is missing for it (extras, keys, files), downloads what it can, and runs it once on request. It imports nothing from module-setup and returns plain data.
+- **module-setup acts.** It renders the form from the schema, tells from package metadata whether an extra can be installed on this platform, maps it to the host's own extra and installs it with uv, stores secrets, keeps the config folder, and runs the Start/Stop state machine.
 - **The host composes.** It lists its sections, hands each library's contract to module-setup, and supplies the function that builds a session from a config.
 
 ## The Setup sequence
 
 For the config being edited, in this order, each step gating the next:
 
-1. `validate` — the config's shape is right. Works with nothing installed.
-2. requirements — every requirement of the config is installed; one click installs the missing ones.
-3. `check` — every item is ready. Needs the requirements.
-4. `prepare` — on click, the library fetches what it can.
-5. Start is enabled.
+1. `check_config` — the config itself is right. Works with nothing installed.
+2. `check_setup` — what this machine is missing for it: extras, keys, files.
+3. The user fixes what only they can: one click installs the missing extras, the Secrets tab sets the missing keys.
+4. `prepare` — on click, the library downloads the missing files.
+5. `check_setup` again; Start is enabled when nothing is missing.
 
 Outside the sequence, `probe` runs one section for real on request (a Test button): it tells which section of an app is broken without starting the others.
 

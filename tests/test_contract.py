@@ -125,17 +125,17 @@ EXTRAS = {"speech-lib": {"local-voice", "cloud-voice"}}
 class SpeechLib:
     """A contract object that honours the contract; tests subclass it to break one rule."""
 
-    def describe(self) -> dict[str, Any]:
+    def config_schema(self) -> dict[str, Any]:
         return _description()
 
-    def requirements(self, config: dict[str, Any]) -> list[str]:
+    def required_extras(self, config: dict[str, Any]) -> list[str]:
         module = config.get("module")
         kind = module.get("type") if isinstance(module, dict) else None
         if kind in ("local-voice", "cloud-voice"):
             return [f"speech-lib[{kind}]"]
         return []
 
-    def validate(self, config: dict[str, Any]) -> list[dict[str, Any]]:
+    def check_config(self, config: dict[str, Any]) -> list[dict[str, Any]]:
         module = config.get("module")
         if not isinstance(module, dict):
             return [{"path": "/module", "message": "module is required"}]
@@ -154,7 +154,7 @@ class SpeechLib:
             )
         return problems
 
-    def check(self, config: dict[str, Any]) -> list[dict[str, Any]]:
+    def check_setup(self, config: dict[str, Any]) -> list[dict[str, Any]]:
         return []
 
     def prepare(self, config: dict[str, Any], on_progress: Any = None) -> None:
@@ -411,7 +411,7 @@ def test_an_installed_distribution_s_extras_are_read_from_its_metadata():
         def __init__(self, extra: str) -> None:
             self.extra = extra
 
-        def requirements(self, config: dict[str, Any]) -> list[str]:
+        def required_extras(self, config: dict[str, Any]) -> list[str]:
             return [f"pytest[{self.extra}]"] if config else []
 
     check_contract(NeedsPytest("dev"), EXAMPLES)
@@ -432,10 +432,10 @@ def _breach(contract: Any, examples: list[dict[str, Any]] | None = None) -> str:
 
 def test_a_contract_object_missing_a_function_is_a_breach():
     class NoProbe:
-        describe = SpeechLib.describe
-        requirements = SpeechLib.requirements
-        validate = SpeechLib.validate
-        check = SpeechLib.check
+        config_schema = SpeechLib.config_schema
+        required_extras = SpeechLib.required_extras
+        check_config = SpeechLib.check_config
+        check_setup = SpeechLib.check_setup
         prepare = SpeechLib.prepare
         options = SpeechLib.options
 
@@ -444,27 +444,27 @@ def test_a_contract_object_missing_a_function_is_a_breach():
 
 def test_a_description_outside_the_contract_is_a_breach():
     class Bad(SpeechLib):
-        def describe(self) -> dict[str, Any]:
+        def config_schema(self) -> dict[str, Any]:
             return {**_description(), "contract": 9}
 
     assert "unknown contract version 9" in _breach(Bad())
 
 
-def test_a_describe_that_changes_between_calls_is_a_breach():
+def test_a_config_schema_that_changes_between_calls_is_a_breach():
     class Unstable(SpeechLib):
         calls = 0
 
-        def describe(self) -> dict[str, Any]:
+        def config_schema(self) -> dict[str, Any]:
             self.calls += 1
             return {**_description(), "title": f"Speech {self.calls}"}
 
     assert "two different values" in _breach(Unstable())
 
 
-def test_an_example_validate_refuses_is_a_breach():
+def test_an_example_check_config_refuses_is_a_breach():
     examples = [*EXAMPLES, {"module": {"type": "cloud-voice"}}]
 
-    assert "validate() refuses example 2" in _breach(SpeechLib(), examples)
+    assert "check_config() refuses example 2" in _breach(SpeechLib(), examples)
 
 
 def test_an_example_key_the_schema_lacks_is_a_breach():
@@ -485,9 +485,9 @@ def test_a_key_under_a_free_form_object_is_not_a_breach():
     _check(SpeechLib(), examples)
 
 
-def test_a_default_validate_refuses_is_a_breach():
+def test_a_default_check_config_refuses_is_a_breach():
     class BadDefault(SpeechLib):
-        def describe(self) -> dict[str, Any]:
+        def config_schema(self) -> dict[str, Any]:
             data = _description()
             data["schema"]["properties"]["module"]["properties"]["timeout"][
                 "default"
@@ -506,7 +506,7 @@ def test_a_module_no_example_covers_is_built_from_its_defaults():
     _check(SpeechLib(), only_cloud)
 
     class WrongDefault(SpeechLib):
-        def describe(self) -> dict[str, Any]:
+        def config_schema(self) -> dict[str, Any]:
             data = _description()
             branch = data["schema"]["properties"]["module"]["oneOf"][0]
             branch["properties"]["voice"]["default"] = 7
@@ -525,17 +525,17 @@ def test_a_module_that_cannot_be_built_without_an_example_is_a_breach():
     assert "['voice_id']" in message
 
 
-def test_a_requirements_that_raises_on_an_empty_config_is_a_breach():
+def test_a_required_extras_that_raises_on_an_empty_config_is_a_breach():
     class Raises(SpeechLib):
-        def requirements(self, config: dict[str, Any]) -> list[str]:
+        def required_extras(self, config: dict[str, Any]) -> list[str]:
             return [f"speech-lib[{config['module']['type']}]"]
 
-    assert "requirements() raised on {}" in _breach(Raises())
+    assert "required_extras() raised on {}" in _breach(Raises())
 
 
 def test_a_requirement_that_is_malformed_or_names_nothing_declared_is_a_breach():
     class Wrong(SpeechLib):
-        def requirements(self, config: dict[str, Any]) -> list[str]:
+        def required_extras(self, config: dict[str, Any]) -> list[str]:
             kind = (config.get("module") or {}).get("type")
             if kind == "local-voice":
                 return ["speech-lib[fast voice"]
@@ -550,13 +550,13 @@ def test_a_requirement_that_is_malformed_or_names_nothing_declared_is_a_breach()
     assert "'other-lib' is not installed" in message
 
 
-def test_requirements_is_probed_on_each_module_alone():
+def test_required_extras_is_probed_on_each_module_alone():
     seen: list[dict[str, Any]] = []
 
     class Records(SpeechLib):
-        def requirements(self, config: dict[str, Any]) -> list[str]:
+        def required_extras(self, config: dict[str, Any]) -> list[str]:
             seen.append(config)
-            return super().requirements(config)
+            return super().required_extras(config)
 
     _check(Records())
 

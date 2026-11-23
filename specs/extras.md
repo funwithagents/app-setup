@@ -11,7 +11,7 @@ tests:
 
 ## Purpose
 
-A contract says what a config needs in the library's own terms: `speech-lib[local-voice]` ([module-contract.md](module-contract.md), "`requirements`"). This spec is what module-setup does with such a requirement: tell whether it is installed, whether it can be on this machine, which extra of the **host** carries it, and install it. None of it needs code in the library: everything is read from the metadata of the installed packages.
+A contract says what a config needs in the library's own terms: `speech-lib[local-voice]` ([module-contract.md](module-contract.md), "`required_extras`"). This spec is what module-setup does with such a requirement: tell whether it is installed, whether it can be on this machine, which extra of the **host** carries it, and install it. None of it needs code in the library: everything is read from the metadata of the installed packages.
 
 ## Is a requirement installed
 

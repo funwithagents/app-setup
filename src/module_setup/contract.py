@@ -2,7 +2,7 @@
 
 A library implements the contract with plain data and seven functions, and imports nothing from
 here. This module is what reads that data: ``SetupContract`` types the seven functions,
-``parse_description`` turns a ``describe()`` result into the frozen objects a form is drawn from
+``parse_description`` turns a ``config_schema()`` result into the frozen objects a form is drawn from
 (refusing anything outside the spec), and ``check_contract`` is the conformance check a library
 runs in its own tests.
 """
@@ -35,10 +35,10 @@ __all__ = [
 CONTRACT_VERSION = 1
 
 _FUNCTIONS = (
-    "describe",
-    "requirements",
-    "validate",
-    "check",
+    "config_schema",
+    "required_extras",
+    "check_config",
+    "check_setup",
     "prepare",
     "options",
     "probe",
@@ -92,13 +92,13 @@ class ContractViolation(AssertionError):
 class SetupContract(Protocol):
     """The seven callables of a contract object. A Python module with these functions qualifies."""
 
-    def describe(self) -> dict[str, Any]: ...
+    def config_schema(self) -> dict[str, Any]: ...
 
-    def requirements(self, config: dict[str, Any]) -> list[str]: ...
+    def required_extras(self, config: dict[str, Any]) -> list[str]: ...
 
-    def validate(self, config: dict[str, Any]) -> list[dict[str, Any]]: ...
+    def check_config(self, config: dict[str, Any]) -> list[dict[str, Any]]: ...
 
-    def check(self, config: dict[str, Any]) -> list[dict[str, Any]]: ...
+    def check_setup(self, config: dict[str, Any]) -> list[dict[str, Any]]: ...
 
     def prepare(
         self,
@@ -180,7 +180,7 @@ class ObjectSpec:
 
 @dataclass(frozen=True)
 class Description:
-    """A parsed ``describe()`` result."""
+    """A parsed ``config_schema()`` result."""
 
     contract: int
     distribution: str
@@ -192,7 +192,7 @@ class Description:
 
 
 def parse_description(data: Any) -> Description:
-    """Turn a ``describe()`` result into typed objects, or raise ``ContractError``."""
+    """Turn a ``config_schema()`` result into typed objects, or raise ``ContractError``."""
     if not isinstance(data, Mapping):
         raise ContractError("the description must be an object")
     _only(data, _DESCRIPTION_KEYS, "")
@@ -560,19 +560,21 @@ def check_contract(
     if absent:
         raise ContractViolation(f"the contract object lacks {absent}")
     try:
-        raw = contract.describe()
+        raw = contract.config_schema()
         description = parse_description(raw)
     except ContractError as exc:
-        raise ContractViolation(f"describe() is outside the contract: {exc}") from exc
+        raise ContractViolation(
+            f"config_schema() is outside the contract: {exc}"
+        ) from exc
 
     breaches: list[str] = []
-    if contract.describe() != raw:
-        breaches.append("describe() returned two different values")
+    if contract.config_schema() != raw:
+        breaches.append("config_schema() returned two different values")
 
     def validated(config: dict[str, Any], what: str) -> None:
-        problems = contract.validate(copy.deepcopy(config))
+        problems = contract.check_config(copy.deepcopy(config))
         if problems:
-            breaches.append(f"validate() refuses {what}: {problems}")
+            breaches.append(f"check_config() refuses {what}: {problems}")
 
     probes: list[tuple[str, dict[str, Any]]] = [("{}", {})]
     for index, example in enumerate(examples):
@@ -632,31 +634,31 @@ def check_contract(
 
     for what, config in probes:
         try:
-            found = contract.requirements(copy.deepcopy(config))
+            found = contract.required_extras(copy.deepcopy(config))
         except Exception as exc:  # noqa: BLE001 - any raise is the breach
-            breaches.append(f"requirements() raised on {what}: {exc!r}")
+            breaches.append(f"required_extras() raised on {what}: {exc!r}")
             continue
         if not isinstance(found, list):
-            breaches.append(f"requirements() must return a list on {what}")
+            breaches.append(f"required_extras() must return a list on {what}")
             continue
         for text in found:
             try:
                 requirement = Requirement(text)
             except (InvalidRequirement, TypeError):
                 breaches.append(
-                    f"requirements() on {what}: {text!r} is not a requirement"
+                    f"required_extras() on {what}: {text!r} is not a requirement"
                 )
                 continue
             declared = extras_of(requirement.name)
             if declared is None:
                 breaches.append(
-                    f"requirements() on {what}: {requirement.name!r} is not installed"
+                    f"required_extras() on {what}: {requirement.name!r} is not installed"
                 )
                 continue
             for extra in requirement.extras:
                 if canonicalize_name(extra) not in declared:
                     breaches.append(
-                        f"requirements() on {what}: {requirement.name!r} declares no "
+                        f"required_extras() on {what}: {requirement.name!r} declares no "
                         f"extra {extra!r}"
                     )
 
