@@ -7,7 +7,6 @@ from fakes import SpeechLib
 from gradio.components import Component
 
 from module_setup.app import App, AppModel, Section
-from module_setup.autostart import autostart_section
 from module_setup.folder import ConfigFolder
 from module_setup.secrets import SecretStore
 from module_setup.ui import secrets_panel, setup_panel
@@ -222,19 +221,19 @@ def test_each_section_has_its_own_checks_acting_on_it_alone(tmp_path: Path) -> N
     assert hidden[5] == ""
 
 
-def test_the_autostart_section_is_a_checkbox_in_its_own_block(tmp_path: Path) -> None:
-    model = _model(
-        tmp_path,
-        sections=(Section("speech", SpeechLib(), title="Speech"), autostart_section()),
-    )
-    config = {**DEFAULTS, "app": {"autostart": False}}
-
+def test_an_app_with_autostart_gets_its_checkbox_saved_at_once(tmp_path: Path) -> None:
+    model = _model(tmp_path, autostart=True)
     with gr.Blocks() as page:
-        draft, revision = gr.State(config), gr.State(0)
-        render_section(model, "app", config, draft, revision)
-    drawn = [b for b in page.blocks.values() if isinstance(b, Component)]
+        setup_panel(model)
+    with gr.Blocks() as without:
+        setup_panel(_model(tmp_path / "other"))
 
-    (checkbox,) = [c for c in drawn if isinstance(c, gr.Checkbox)]
-    assert checkbox.value is False
-    assert checkbox.info == "Start the session when the app launches."
-    assert section_title(model, "app") == "App"
+    (checkbox,) = [b for b in page.blocks.values() if isinstance(b, gr.Checkbox)]
+    loaded = _handler(page, "on_launch_load")()
+    note = _handler(page, "on_autostart")(False)
+
+    assert checkbox.label == "Start the session when the app launches"
+    assert loaded is True  # the app's default, until the user chooses
+    assert note == "The session will not start when the app launches."
+    assert model.autostart() is False
+    assert not [b for b in without.blocks.values() if isinstance(b, gr.Checkbox)]

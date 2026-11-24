@@ -1,6 +1,9 @@
 ---
 code:
   - src/module_setup/autostart.py
+  - src/module_setup/app.py
+  - src/module_setup/folder.py
+  - src/module_setup/ui/panels.py
 tests:
   - tests/test_autostart.py
   - tests/ui/test_panels.py
@@ -12,76 +15,38 @@ tests:
 
 ## Purpose
 
-Some apps start their session as soon as they launch (a demo that listens right away, a robot app that wakes up talking). Each such app used to decide that its own way: a hard-coded start, a flag, nothing. This spec gives them one way, so every app built on the panels behaves the same: whether the app starts at launch is a setting of its config, edited on the Setup panel like any other, and a command-line flag overrides it for one launch.
+Some apps start their session as soon as they launch: a robot's app started at boot, a demo that used to connect before its page opened. They keep doing so, the same way in every app built on module-setup, and the user can turn it off, or force it for one launch.
 
-What starting means stays the app's ([app.md](app.md): running the config is the app's own). module-setup provides the setting, the flags and the decision; the app calls its own Start when the decision says so.
+## Decided
 
-## The section
+- **An app declares it:** `App(..., autostart=True)` — whether it starts its session at launch by default. `None` (the default) means the app has no autostart: no switch is drawn, and it starts only on `--start`.
+- **The user's choice lives apart from the config,** in the folder's **`launch.json`** (`{"autostart": bool}`, [config-folder.md](config-folder.md)), written only once the user changes it; until then the app's default applies.
+  - So `config.json`, and `AppModel.used_config`, stay exactly the app's own sections: an app building a typed config object from them has nothing to add, and no key of the app's can collide with it.
+  - So the choice is not caught by the config's lock: it can change while a session runs, and takes effect at the next launch. **Reset to defaults** resets the config only.
+- **The Setup panel draws it** for an app with autostart: a "Start the session when the app launches" checkbox next to Save, Revert and Reset, saved at once ([ui.md](ui.md)).
+- **One launch can override it:** `add_start_arguments(parser)` adds `--start` / `--no-start` (`argparse.BooleanOptionalAction`, default `None`), so an app's command line reads the same everywhere. `--start true/false` was not chosen: a flag pair is the usual style, and needs no string-to-boolean parsing.
+- **`starts_at_launch(model, flag)`** decides: the flag when given; else `launch.json`; else `App.autostart`; `False` for an app without autostart. Whether the saved config can run is the app's to check: its own Start looks at `model.blockers(...)` and shows them instead of starting.
 
-```python
-from module_setup.autostart import autostart_section
-
-APP = App(
-    ...,
-    sections=(Section("speech", speech_lib.setup, title="Speech"), autostart_section(default=True)),
-    default_config={"speech": {...}, "app": {"autostart": True}},
-)
-```
-
-`autostart_section(default=True, name="app", title="App") -> Section` is a section of `config.json` like a library's ([app.md](app.md)), named `name` (`app` unless the app already uses that key), holding one document:
-
-```json
-{"autostart": true}
-```
-
-Its contract (`AutostartContract`) is a real module contract ([module-contract.md](module-contract.md)), which `check_contract` accepts:
-
-| Function | What it does |
-|---|---|
-| `config_schema` | `{"autostart": boolean}`, titled "Start at launch", described "Start the session when the app launches.", its default `default` |
-| `check_config` | Refuses an `autostart` that is not `true` or `false`; an absent one is the default |
-| `required_extras`, `check_setup`, `options` | Nothing: it needs no extra and nothing on the machine |
-| `prepare` | Does nothing |
-| `probe` | Ok, nothing to test |
-
-The Setup panel draws it as any section: its own block, titled `title`, holding a checkbox. Saving it is saving the config, refused while a session runs.
-
-The app's default config should set it, so a new folder says what the app does. Starting at launch by default is safe only when the default config needs nothing installed and no key (a fixture module); otherwise default to `false`.
-
-## The flags
-
-`add_start_arguments(parser)` adds `--start` / `--no-start` to the app's `argparse` parser (`BooleanOptionalAction`): `options.start` is `True`, `False`, or `None` when neither is given. A flag is for one launch: it is not saved.
-
-## The decision
-
-`starts_at_launch(model, flag) -> bool`:
-
-1. the flag, when given (`--start` / `--no-start`);
-2. else the saved config's `<name>.autostart`, `<name>` being the section whose contract is the autostart contract (`app` for an app declaring none);
-3. else the section's default (`False` for an app declaring none).
-
-A launch that should start but whose saved config has blockers (`model.blockers(config)`, [app.md](app.md)) is the app's to handle: its Start refuses as it would from a button, and the app shows the blockers instead of starting. The page opens either way, so the user can fix them.
+## API
 
 ```python
-parser = argparse.ArgumentParser()
-add_start_arguments(parser)
-options = parser.parse_args()
-model = AppModel(APP, ConfigFolder(options.folder, APP.default_config), locked=session.running)
-if starts_at_launch(model, options.start):
-    blockers = session.start(model)  # the app's own Start; shows its blockers when there are some
+@dataclass(frozen=True)
+class App:
+    ...
+    autostart: bool | None = None
+
+class AppModel:
+    def autostart(self) -> bool | None: ...         # launch.json, else App.autostart; None without autostart
+    def set_autostart(self, on: bool) -> None: ...  # writes launch.json; RuntimeError for an app without autostart
+
+def add_start_arguments(parser: argparse.ArgumentParser) -> None: ...
+def starts_at_launch(model: AppModel, flag: bool | None) -> bool: ...
 ```
 
 ## Testing
 
-`tests/test_autostart.py`:
-
-- the contract passes `check_contract`; its schema's default follows `default`;
-- a non-boolean refused, at a pointer into the app's config; the section's name and title as given;
-- the flag wins over the saved config; without it, the saved config decides, read at the section's own name; a config without the section falls back to its default; an app without the section does not start unless told;
-- `--start`, `--no-start` and neither parsed next to the app's own arguments.
-
-`tests/ui/test_panels.py`: the section drawn as a checkbox, showing the saved value, under its title.
+`tests/test_autostart.py`: the app's default holds until a choice is saved, and nothing is written before; the choice goes to `launch.json`, never into the config or `used_config`, and survives Reset; it can change while the config is locked; an app without autostart has no choice and starts only on `--start`; the flag, then the saved choice, then the default; the arguments parse `--start`, `--no-start` and neither. `tests/ui/test_panels.py`: an app with autostart gets the checkbox, loaded from the saved choice and saved on change; an app without gets none.
 
 ## Open questions
 
-None.
+1. **A first version kept the choice in the config,** as a section module-setup provided (`autostart_section`). Dropped before release: apps that build a typed object from their config would have had to accept a section they never use, and an app wanting its own `app` section could collide with it.
