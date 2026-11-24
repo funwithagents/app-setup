@@ -31,7 +31,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tests"))
 
 from fakes import SpeechLib  # pyright: ignore[reportMissingImports]
 
+from app_setup import app as app_module
 from app_setup.app import App, AppModel, Section
+from app_setup.extras import RequirementStatus
 from app_setup.folder import ConfigFolder
 from app_setup.secrets import SecretStore
 from app_setup.ui import secrets_panel, setup_panel
@@ -53,10 +55,31 @@ def _textbox(page: Any, label: str) -> Any:
     return page.locator("label").filter(has_text=pattern).locator("textarea")
 
 
+class Installer:
+    """uv faked: an install waits on a gate the test opens, then installs the library's
+    extras (the fake library reads them from `installed`)."""
+
+    def __init__(self, lib: SpeechLib) -> None:
+        self.lib = lib
+        self.gate = threading.Event()
+        self.runs: list[list[str]] = []
+
+    def install(self, extras: list[str], on_output: Any = None) -> int:
+        self.runs.append(list(extras))
+        if on_output is not None:
+            on_output("Resolved 3 packages")
+        if not self.gate.wait(timeout=20):
+            return 1
+        for kind in self.lib.installed:
+            self.lib.installed[kind] = True
+        return 0
+
+
 class Served:
     def __init__(self, url: str, folder: ConfigFolder, lib: SpeechLib) -> None:
         self.url, self.folder, self.lib = url, folder, lib
         self.running = False  # the app's session, as the lock reads it
+        self.installer = Installer(lib)
 
 
 @pytest.fixture
@@ -66,6 +89,20 @@ def served(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Served]:
     keys there and the library reads them from there."""
     environ = {k: v for k, v in os.environ.items() if k != "CLOUD_VOICE_KEY"}
     monkeypatch.setattr(os, "environ", environ)
+    # The host's extras: `speech-local` and `speech-cloud` carry the voices' extras.
+    monkeypatch.setattr(
+        app_module,
+        "host_extras",
+        lambda requirement, *, host: {
+            "speech-lib[local-voice]": ("speech-local",),
+            "speech-lib[cloud-voice]": ("speech-cloud",),
+        }.get(requirement, ()),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "requirement_status",
+        lambda requirement: RequirementStatus(requirement, "missing"),
+    )
     lib = SpeechLib()
     app = App(
         name="browser",
@@ -76,6 +113,7 @@ def served(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Served]:
     folder = ConfigFolder(tmp_path, DEFAULTS)
     port = _free_port()
     served = Served(f"http://127.0.0.1:{port}/", folder, lib)
+    monkeypatch.setattr(app_module, "find_installer", lambda host: served.installer)
     model = AppModel(
         app, folder, SecretStore(folder.env_path, environ), lambda: served.running
     )
@@ -197,8 +235,8 @@ def test_one_item_is_prepared_from_its_row_with_its_progress(
     page = _open_setup(served, browser)
     lexicon = page.locator(".row", has_text="Lexicon").last
     voice = page.locator(".row", has_text="Voice Ada").last
-    lexicon.get_by_text("Missing").wait_for()  # the rows of the first check
-    voice.get_by_text("Not prepared yet").wait_for()
+    lexicon.get_by_text("Missing – required").wait_for()  # the first check's lines
+    voice.get_by_text("Missing – optional").wait_for()
 
     lexicon.get_by_role("button", name="Prepare").click()
     lexicon.get_by_text("Starting").wait_for()  # its progress, on its own row
@@ -207,7 +245,7 @@ def test_one_item_is_prepared_from_its_row_with_its_progress(
     lib.gate.set()
     lexicon.get_by_text("Ready").wait_for()
     assert lib.lexicon and lib.started == ["lexicon"]
-    voice.get_by_text("Not prepared yet").wait_for()  # the other row left as it was
+    voice.get_by_text("Missing – optional").wait_for()  # the other line left as it was
     assert voice.get_by_role("button", name="Prepare").is_enabled()
 
 
@@ -249,14 +287,51 @@ def test_a_key_saved_in_the_keys_tab_turns_its_row_ready_without_check(
     voice_id.fill("v-42")
     voice_id.press("Tab")  # the field left: its section checked again
     key_row = page.locator(".row").filter(has_text=re.compile(r"CLOUD_VOICE_KEY"))
-    key_row.filter(has_text="Missing").last.wait_for()
+    key_row.filter(has_text="Missing – required").last.wait_for()
 
     page.get_by_role("tab", name="Keys").click()
     _textbox(page, "Variable").fill("CLOUD_VOICE_KEY")
-    page.locator("input[type=password]").fill("s3cret")
+    page.get_by_role("textbox", name="Value").fill("s3cret")
     page.get_by_role("button", name="Save to the folder's .env").click()
     page.get_by_text("CLOUD_VOICE_KEY saved.").wait_for()
 
     page.get_by_role("tab", name="Setup").click()
     key_row.filter(has_text="Ready").last.wait_for()  # no click on Check
-    page.get_by_text("This machine is ready for this config.").wait_for()
+    assert page.get_by_text("Missing – required").count() == 0
+
+
+def test_an_extra_is_installed_from_its_line(served: Served, browser: object) -> None:
+    served.lib.installed["local-voice"] = False
+    page = _open_setup(served, browser)
+    line = page.locator(".row", has_text="local-voice extra").last
+    line.get_by_text("Missing – required").wait_for()
+
+    line.get_by_role("button", name="Install").click()
+    line.get_by_text("Installing…").wait_for()  # uv's latest line, on its own line
+    line.get_by_text("Resolved 3 packages").wait_for()
+    assert line.get_by_role("button", name="Install").is_disabled()
+
+    served.installer.gate.set()
+    line.get_by_text("Ready").wait_for()  # the section checked again
+    assert served.installer.runs == [["speech-local"]]
+
+
+def test_a_key_is_saved_from_its_line(served: Served, browser: object) -> None:
+    page = _open_setup(served, browser)
+    _textbox(page, "speed").wait_for()
+    page.get_by_label("Voice", exact=True).click()
+    page.get_by_role("option", name="Cloud voice (hosted)").click()
+    voice_id = _textbox(page, "voice_id *")
+    voice_id.wait_for()
+    voice_id.press_sequentially("v-42")
+    voice_id.press("Tab")
+    line = page.locator(".row", has_text="Missing – required").last
+    line.get_by_text("CLOUD_VOICE_KEY").first.wait_for()
+
+    line.locator("input[type=password]").fill("s3cret")
+    line.get_by_role("button", name="Save").click()
+
+    page.locator(".row", has_text="CLOUD_VOICE_KEY").filter(
+        has_text="Ready"
+    ).last.wait_for()
+    assert served.folder.env_path.read_text() == 'CLOUD_VOICE_KEY="s3cret"\n'

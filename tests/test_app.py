@@ -390,6 +390,31 @@ def test_the_secrets_the_config_names_and_where_they_come_from(
     assert model.secret_variables(DEFAULTS) == []
 
 
+def test_a_key_item_is_told_the_variable_it_is_about(
+    tmp_path: Path, lib: SpeechLib
+) -> None:
+    model = _model(tmp_path, lib)
+    cloud = {
+        "speech": {"module": {"type": "cloud-voice", "voice_id": "v"}},
+    }
+    renamed = {
+        "speech": {
+            "module": {"type": "cloud-voice", "voice_id": "v", "api_key_env": "MY_KEY"}
+        },
+    }
+
+    def variables(config: dict[str, Any]) -> dict[str, str | None]:
+        return {item.id: item.variable for item in model.check_setup(config)}
+
+    assert variables(cloud) == {
+        "extra:speech-lib[cloud-voice]": None,
+        "key:CLOUD_VOICE_KEY": "CLOUD_VOICE_KEY",
+    }
+    assert variables(renamed)["key:MY_KEY"] == "MY_KEY"
+    # Files are not keys, nor is an extra.
+    assert set(variables(DEFAULTS).values()) == {None}
+
+
 def test_building_the_model_makes_the_folder_ready_and_loads_its_secrets(
     tmp_path: Path, lib: SpeechLib, monkeypatch: pytest.MonkeyPatch
 ) -> None:

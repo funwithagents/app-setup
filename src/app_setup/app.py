@@ -9,6 +9,7 @@ it, install, prepare, probe, and say why the config cannot run yet. Running it i
 from __future__ import annotations
 
 import copy
+import re
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -96,6 +97,8 @@ class SetupItem:
     required: bool
     # For an extra: the host's extras that install it ("" when none carries it).
     host_extras: tuple[str, ...] = field(default=())
+    # For a key: the environment variable it is about (a field to set it on its line).
+    variable: str | None = None
 
     @property
     def is_extra(self) -> bool:
@@ -184,6 +187,16 @@ def _extra_item(requirement: str) -> dict[str, Any]:
         "preparable": False,
         "required": True,
     }
+
+
+def _named(variables: Sequence[str], *texts: str) -> str | None:
+    """The first of *variables* one of *texts* names as a whole word: the variable a key
+    item is about (the contract gives an item no kind)."""
+    for variable in variables:
+        word = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(variable)}(?![A-Za-z0-9_])")
+        if any(word.search(text) for text in texts):
+            return variable
+    return None
 
 
 class AppModel:
@@ -379,13 +392,24 @@ class AppModel:
                 ):
                     found.append(self._item(name, _extra_item(requirement)))
                 continue
+            description = self.description(name)
+            variables = (
+                [v for _, v in secret_variables(description.schema, document)]
+                if description is not None
+                else []
+            )
             for item in contract.check_setup(
                 copy.deepcopy(dict(document)), base_dir=self._base_dir
             ):
-                found.append(self._item(name, item))
+                found.append(self._item(name, item, variables))
         return found
 
-    def _item(self, section: str, item: Mapping[str, Any]) -> SetupItem:
+    def _item(
+        self,
+        section: str,
+        item: Mapping[str, Any],
+        variables: Sequence[str] = (),
+    ) -> SetupItem:
         absent = [key for key in _ITEM_KEYS if key not in item]
         if absent:
             raise ContractError(
@@ -419,6 +443,9 @@ class AppModel:
             preparable=bool(item["preparable"]),
             required=bool(item["required"]),
             host_extras=carriers,
+            variable=None
+            if identifier.startswith("extra:") or item["preparable"]
+            else _named(variables, identifier, str(item.get("title", ""))),
         )
 
     def blockers(

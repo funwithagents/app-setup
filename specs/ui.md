@@ -13,7 +13,7 @@ tests:
 
 # UI
 
-**Status:** Updated
+**Status:** Implemented
 
 ## Purpose
 
@@ -124,7 +124,7 @@ A change of structure (a module switched, an optional object turned on or off, a
 
 ## Reports
 
-`app_setup.ui.report` writes the model's answers as Markdown: the problems with their pointers, the summary line, each table line's status and explanation (the wording above, the transient states included), and the secrets table. The table itself, with its buttons, key fields and progress, is drawn by `app_setup.ui.panels`, inside a `gr.render` per section redrawn on each check. Every `gr.render` of the panels runs one at a time (`concurrency_limit=1`): two runs of one render at once (two of its triggers firing together, a Check and the timer's re-check) unregister each other's listeners, and a button drawn by one then calls a function the server no longer knows (found by the browser tests, one run in five).
+`app_setup.ui.report` writes the model's answers as Markdown: the problems with their pointers, the summary line, each table line's status and explanation (the wording above, the transient states included), and the secrets table. The table itself, with its buttons, key fields and progress, is drawn by `app_setup.ui.panels`, inside a `gr.render` per section, drawn again when a check finds other items than the last one (a check finding the same leaves the table, and a line being clicked, as they are; the rows' timer updates each line's status). The panels' `gr.render`s run one at a time, all of them together (one concurrency group, limit one): gradio numbers a page's listeners from a counter two renders running at once can read alike (the form and the table on page load), and two runs of one render unregister each other's listeners (a Check and the timer's re-check); either way a button drawn then calls a function the server no longer knows (found by the browser tests, under load).
 
 ## Testing
 

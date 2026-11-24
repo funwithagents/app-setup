@@ -362,7 +362,7 @@ def render_section(
         gr.Markdown(
             "This section's library is not installed"
             + (f" (the `{section.host_extra}` extra)" if section.host_extra else "")
-            + ": **Install missing extras** below, then reload the page."
+            + ": **Install all** below, then reload the page."
         )
         return
     document = get_at(config, (name,))

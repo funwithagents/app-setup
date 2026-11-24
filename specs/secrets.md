@@ -7,7 +7,7 @@ tests:
 
 # Secrets
 
-**Status:** Updated
+**Status:** Implemented
 
 ## Purpose
 
