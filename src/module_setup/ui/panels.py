@@ -30,6 +30,11 @@ _loads = itertools.count(1)
 
 LOCKED = "🔒 A session is running: stop it to change the config."
 
+# What a field's mark means: a field with a default shows it in its hover text instead.
+REQUIRED = (
+    "Fields marked * must be filled in; the others have a default or can stay empty."
+)
+
 
 @dataclass(frozen=True)
 class SetupPanel:
@@ -82,6 +87,7 @@ def setup_panel(model: AppModel) -> SetupPanel:
         reset = gr.Button("Reset to defaults", scale=0)
     lock = gr.Markdown()
     notice = gr.Markdown()
+    gr.Markdown(REQUIRED)
 
     @gr.render(inputs=[draft], triggers=[revision.change])
     def form(config: Config) -> None:

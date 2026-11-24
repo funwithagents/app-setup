@@ -104,6 +104,7 @@ def test_switching_module_typing_and_picking_from_a_list_are_saved(
     folder = served.folder
     page = _open_setup(served, browser)
     _textbox(page, "speed").wait_for()  # the form is drawn
+    page.get_by_text("Fields marked * must be filled in").wait_for()
     page.get_by_label("Voice", exact=True).click()
     page.get_by_role("option", name="Cloud voice (hosted)").click()
 

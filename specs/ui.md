@@ -50,7 +50,7 @@ Serving the page, the command line, when to start a session (a setting of the ap
 **`setup_panel(model) -> SetupPanel`**
 
 - **Save**, **Revert to saved**, **Reset to defaults**. Save and Reset are disabled, with a line saying a session is running, while the model is locked (`AppModel.locked`, polled every second).
-- **The form**: one group per section the config uses.
+- **The form**: one group per section the config uses, under a line saying that a field marked `*` must be filled in (the schema's `required`) and the others have a default (shown in the field's hover text) or can stay empty.
 - **Checks**: **Check** shows the config's problems and a table of what the machine is missing; **Install missing extras** installs the host extras that carry them, streaming uv's output; **Download missing files** runs `prepare`, streaming its progress; **Test** runs one section's `probe`. All four act on the form's current values, saved or not. The checks also run by themselves each time the form's structure changes (the page loaded, a module switched, an optional object turned on or off, a choice from a list, revert, reset), and the output is cleared then: what was shown was about another config. A value typed does not run them; **Check** does.
 
 It returns what the app can listen to:
