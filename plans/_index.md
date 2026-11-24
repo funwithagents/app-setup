@@ -16,6 +16,7 @@ Implementation plans for module-setup — each plan turns a settled part of a sp
 | [202611241000_panels.md](202611241000_panels.md) | The Setup and Secrets panels an app places in its own page ([specs/ui.md](../specs/ui.md), [specs/app.md](../specs/app.md), [specs/config-folder.md](../specs/config-folder.md)): no page, no `launch`, no session runner; the model locked by the app's session, the folder and secrets made ready when it is built | Done |
 | [202611241500_section-fixes.md](202611241500_section-fixes.md) | Fixes found in the first app built on the panels ([specs/app.md](../specs/app.md), [specs/ui.md](../specs/ui.md), [specs/module-contract.md](../specs/module-contract.md)): a section with problems still reports its extras, a module switch drops the old module's fields, the checks run on each redraw, `*` explained, the Secrets panel showing a shadowed `.env` value and the `.env`'s other variables, each section with its own Check, Install, Download and Test | Done |
 | [202611251000_ci.md](202611251000_ci.md) | Continuous integration ([specs/ci.md](../specs/ci.md)): lint, format and types, the fast tier on three platforms, the browser tests with a locked Playwright | Done |
+| [202611251100_autostart.md](202611251100_autostart.md) | Autostart ([specs/autostart.md](../specs/autostart.md)): the section an app places in its config to start its session at launch, the `--start` / `--no-start` flags, `starts_at_launch` | Done |
 | _(add plans here — see [_plan-template.md](_plan-template.md))_ | | |
 
 ## Status legend

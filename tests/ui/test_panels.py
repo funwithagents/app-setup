@@ -7,6 +7,7 @@ from fakes import SpeechLib
 from gradio.components import Component
 
 from module_setup.app import App, AppModel, Section
+from module_setup.autostart import autostart_section
 from module_setup.folder import ConfigFolder
 from module_setup.secrets import SecretStore
 from module_setup.ui import secrets_panel, setup_panel
@@ -219,3 +220,21 @@ def test_each_section_has_its_own_checks_acting_on_it_alone(tmp_path: Path) -> N
     assert (hidden[0]["visible"], hidden[4]["visible"]) == (True, False)
     assert "/backup/module/voice_id" in shown[5]
     assert hidden[5] == ""
+
+
+def test_the_autostart_section_is_a_checkbox_in_its_own_block(tmp_path: Path) -> None:
+    model = _model(
+        tmp_path,
+        sections=(Section("speech", SpeechLib(), title="Speech"), autostart_section()),
+    )
+    config = {**DEFAULTS, "app": {"autostart": False}}
+
+    with gr.Blocks() as page:
+        draft, revision = gr.State(config), gr.State(0)
+        render_section(model, "app", config, draft, revision)
+    drawn = [b for b in page.blocks.values() if isinstance(b, Component)]
+
+    (checkbox,) = [c for c in drawn if isinstance(c, gr.Checkbox)]
+    assert checkbox.value is False
+    assert checkbox.info == "Start the session when the app launches."
+    assert section_title(model, "app") == "App"
