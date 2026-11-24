@@ -8,7 +8,7 @@ tests:
 
 # App
 
-**Status:** Updated
+**Status:** Implemented
 
 ## Purpose
 

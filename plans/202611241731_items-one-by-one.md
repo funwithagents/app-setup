@@ -1,6 +1,6 @@
 # Items one by one: required or not, each prepared on its own, with progress
 
-**Status:** Todo
+**Status:** Done
 
 Implements the updated [specs/module-contract.md](../specs/module-contract.md) (`check_setup`'s `required`, `prepare` one item per call, its progress), [specs/app.md](../specs/app.md) (items prepared in parallel, each with its outcome, `to_prepare`, `deferred`, the blockers) and [specs/ui.md](../specs/ui.md) (a row per item, **Prepare** / **Prepare all**, progress per row). No compatibility with the previous shape: no library implementing the contract has been merged yet.
 

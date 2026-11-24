@@ -12,6 +12,7 @@ import json
 import re
 import socket
 import sys
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -52,23 +53,24 @@ def _textbox(page: Any, label: str) -> Any:
 
 
 class Served:
-    def __init__(self, url: str, folder: ConfigFolder) -> None:
-        self.url, self.folder = url, folder
+    def __init__(self, url: str, folder: ConfigFolder, lib: SpeechLib) -> None:
+        self.url, self.folder, self.lib = url, folder, lib
         self.running = False  # the app's session, as the lock reads it
 
 
 @pytest.fixture
 def served(tmp_path: Path) -> Iterator[Served]:
     """An app's own page: its tab first, then the two panels in tabs of its own."""
+    lib = SpeechLib()
     app = App(
         name="browser",
         host="app-setup",
-        sections=(Section("speech", SpeechLib()),),
+        sections=(Section("speech", lib),),
         default_config=DEFAULTS,
     )
     folder = ConfigFolder(tmp_path, DEFAULTS)
     port = _free_port()
-    served = Served(f"http://127.0.0.1:{port}/", folder)
+    served = Served(f"http://127.0.0.1:{port}/", folder, lib)
     model = AppModel(
         app, folder, SecretStore(folder.env_path, {}), lambda: served.running
     )
@@ -180,3 +182,25 @@ def test_a_variable_of_the_env_file_is_removed_from_its_row(
     assert env_path.read_text() == 'KEEP_KEY="x2"\n'
     page.get_by_text("KEEP_KEY").first.wait_for()
     assert page.get_by_role("button", name="Remove").count() == 1
+
+
+def test_one_item_is_prepared_from_its_row_with_its_progress(
+    served: Served, browser: object
+) -> None:
+    lib = served.lib
+    lib.gate = threading.Event()  # holds the preparation once started
+    page = _open_setup(served, browser)
+    lexicon = page.locator(".row", has_text="Lexicon").last
+    voice = page.locator(".row", has_text="Voice Ada").last
+    lexicon.get_by_text("Missing").wait_for()  # the rows of the first check
+    voice.get_by_text("Not prepared yet").wait_for()
+
+    lexicon.get_by_role("button", name="Prepare").click()
+    lexicon.get_by_text("Starting").wait_for()  # its progress, on its own row
+    assert lexicon.get_by_role("button", name="Prepare").is_disabled()
+
+    lib.gate.set()
+    lexicon.get_by_text("Ready").wait_for()
+    assert lib.lexicon and lib.started == ["lexicon"]
+    voice.get_by_text("Not prepared yet").wait_for()  # the other row left as it was
+    assert voice.get_by_role("button", name="Prepare").is_enabled()

@@ -7,7 +7,7 @@ tests:
 
 # Module contract
 
-**Status:** Updated
+**Status:** Implemented
 
 ## Purpose
 

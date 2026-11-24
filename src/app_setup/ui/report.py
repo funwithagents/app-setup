@@ -6,26 +6,24 @@ Pure functions from the model's answers to text, so the wording is tested withou
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
 from app_setup.app import Problem, SetupItem
 from app_setup.secrets import SecretVariable
 
 __all__ = [
+    "Progress",
     "config_report",
+    "item_line",
     "secrets_report",
-    "setup_report",
+    "setup_summary",
 ]
 
-_STATUS = {"ready": "✅ ready", "missing": "❌ missing", "unknown": "❔ unknown"}
 _SOURCE = {
     "shell": "✅ the shell",
     "file": "✅ the folder's .env",
     "missing": "❌ not set",
 }
-
-
-def _cell(text: str) -> str:
-    return text.replace("|", "\\|").replace("\n", " ")
 
 
 def config_report(problems: Sequence[Problem]) -> str:
@@ -36,31 +34,76 @@ def config_report(problems: Sequence[Problem]) -> str:
     return "\n".join(lines)
 
 
-def setup_report(items: Sequence[SetupItem]) -> str:
-    """What one section needs on this machine, item by item (the Setup panel shows it
-    under that section, so the table has no section column)."""
+def setup_summary(items: Sequence[SetupItem]) -> str:
+    """One line over a section's item rows: whether this machine can run its config."""
     if not items:
         return "✅ **This machine needs nothing more for this config.**"
-    missing = [item for item in items if item.status == "missing"]
-    header = (
-        "✅ **This machine is ready for this config.**"
-        if not missing
-        else f"❌ **{len(missing)} thing(s) missing on this machine.**"
-    )
-    lines = [header, "", "| What | Status | Detail |", "|---|---|---|"]
-    for item in items:
-        detail = item.detail
-        if item.installable:
-            detail += (
-                f" **Install missing extras** installs it (`{item.host_extras[0]}`)."
-            )
-        elif item.preparable and item.status != "ready":
-            detail += " **Download missing files** gets it."
-        lines.append(
-            f"| {_cell(item.title)} "
-            f"| {_STATUS.get(item.status, item.status)} | {_cell(detail)} |"
+    blocking = [item for item in items if item.blocking]
+    deferred = [item for item in items if item.deferred]
+    if blocking:
+        line = f"❌ **{len(blocking)} thing(s) missing on this machine.**"
+    elif deferred:
+        line = "✅ **This machine can run this config.**"
+    else:
+        line = "✅ **This machine is ready for this config.**"
+    if deferred:
+        line += (
+            f" {len(deferred)} thing(s) not prepared yet: the first start will prepare "
+            "them itself, and be slower."
         )
-    return "\n".join(lines)
+    return line
+
+
+@dataclass(frozen=True)
+class Progress:
+    """What an item's row shows of its preparation: running, or how it ended."""
+
+    running: bool
+    fraction: float | None  # the share done, None when the library cannot measure
+    message: str  # the library's latest words, or the failure's message
+    elapsed_s: float
+    ok: bool | None = None  # None while running
+
+
+_BAR = 12
+
+
+def _bar(fraction: float) -> str:
+    done = round(max(0.0, min(1.0, fraction)) * _BAR)
+    return "▓" * done + "░" * (_BAR - done)
+
+
+def item_line(item: SetupItem, progress: Progress | None = None) -> str:
+    """An item's row: its title, its state in plain words, its detail and what to do;
+    while it is prepared, its progress; once prepared, how it ended."""
+    title = f"**{item.title}**"
+    if progress is not None and progress.running:
+        if progress.fraction is not None:
+            return (
+                f"{title} — ⏳ `{_bar(progress.fraction)}` {progress.fraction:.0%} · "
+                f"{progress.message}"
+            )
+        doing = progress.message or "Preparing"
+        return f"{title} — ⏳ {doing} ({progress.elapsed_s:.0f} s)"
+    if progress is not None and progress.ok:
+        return f"{title} — ✅ Ready."
+    if progress is not None and progress.ok is False:
+        return f"{title} — ❌ Failed: {progress.message} **Prepare** tries again."
+    if item.status == "ready":
+        return f"{title} — ✅ Ready. {item.detail}".rstrip()
+    if item.status == "unknown":
+        return f"{title} — ❔ Unknown. {item.detail}".rstrip()
+    if not item.required:
+        return (
+            f"{title} — ⏳ Not prepared yet. {item.detail} The first start will prepare "
+            "it itself and be slower; **Prepare** does it now."
+        )
+    todo = ""
+    if item.installable:
+        todo = f" **Install missing extras** installs it (`{item.host_extras[0]}`)."
+    elif item.preparable:
+        todo = " **Prepare** gets it."
+    return f"{title} — ❌ Missing. {item.detail}{todo}"
 
 
 SHADOWED = "✅ the shell (the folder's .env also sets it, unused)"

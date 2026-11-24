@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import threading
 from typing import Any
 
 
@@ -106,7 +107,14 @@ class SpeechLib:
 
     def __init__(self) -> None:
         self.installed = {"local-voice": True, "cloud-voice": True}
+        # What is ready on the machine: the voices' weights and the lexicon.
         self.downloaded: set[str] = set()
+        self.lexicon = False
+        # Preparing: the items that fail, and a gate each preparation waits on once started
+        # (None: no wait), so a test can see two preparations overlap.
+        self.failing: set[str] = set()
+        self.gate: threading.Event | None = None
+        self.started: list[str] = []
         self.probed: list[dict[str, Any]] = []
         # The `base_dir` each machine-facing call was given, by function name.
         self.base_dirs: dict[str, str | None] = {}
@@ -145,6 +153,7 @@ class SpeechLib:
                 "status": "ready" if ok else "missing",
                 "detail": "Installed." if ok else f"pip install 'speech-lib[{kind}]'",
                 "preparable": False,
+                "required": True,
             }
         ]
         if kind == "cloud-voice":
@@ -156,6 +165,7 @@ class SpeechLib:
                     "status": "ready" if os.environ.get(name) else "missing",
                     "detail": "Set." if os.environ.get(name) else f"Set {name}.",
                     "preparable": False,
+                    "required": True,
                 }
             )
         elif ok:
@@ -169,6 +179,19 @@ class SpeechLib:
                     if voice in self.downloaded
                     else "Not downloaded yet.",
                     "preparable": True,
+                    # The library downloads a voice itself when a session first speaks.
+                    "required": False,
+                }
+            )
+            items.append(
+                {
+                    "id": "lexicon",
+                    "title": "Lexicon",
+                    "status": "ready" if self.lexicon else "missing",
+                    "detail": "Built." if self.lexicon else "Not built yet.",
+                    "preparable": True,
+                    # A session cannot start without it.
+                    "required": True,
                 }
             )
         return items
@@ -176,15 +199,32 @@ class SpeechLib:
     def prepare(
         self,
         config: dict[str, Any],
-        on_progress: Any = None,
+        item: str,
         *,
+        on_progress: Any = None,
         base_dir: str | None = None,
     ) -> None:
         self.base_dirs["prepare"] = base_dir
         voice = config["module"].get("voice", "Ada")
-        if on_progress is not None:
-            on_progress({"id": f"weights:{voice}", "fraction": 1.0, "message": "done"})
-        self.downloaded.add(voice)
+        if item not in (f"weights:{voice}", "lexicon"):
+            raise ValueError(f"{item!r} is not a preparable item of this config")
+
+        def report(fraction: float, message: str) -> None:
+            if on_progress is not None:
+                on_progress({"fraction": fraction, "message": message})
+
+        self.started.append(item)
+        report(0.0, "Starting")
+        if self.gate is not None and not self.gate.wait(timeout=10):
+            raise TimeoutError("the test never opened the gate")
+        if item in self.failing:
+            raise OSError(f"Could not get {item}: the server is unreachable.")
+        report(0.5, "Halfway")
+        if item == "lexicon":
+            self.lexicon = True
+        else:
+            self.downloaded.add(voice)
+        report(1.0, "Done")
 
     def options(
         self, name: str, config: dict[str, Any], *, base_dir: str | None = None

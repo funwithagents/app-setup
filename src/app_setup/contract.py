@@ -106,11 +106,14 @@ class SetupContract(Protocol):
         self, config: dict[str, Any], *, base_dir: str | None = None
     ) -> list[dict[str, Any]]: ...
 
+    # One item per call (an id `check_setup` returned); app-setup prepares several items
+    # by calling it for each at the same time.
     def prepare(
         self,
         config: dict[str, Any],
-        on_progress: Callable[[dict[str, Any]], None] | None = None,
+        item: str,
         *,
+        on_progress: Callable[[dict[str, Any]], None] | None = None,
         base_dir: str | None = None,
     ) -> None: ...
 
@@ -566,6 +569,36 @@ def _takes_base_dir(function: Callable[..., Any]) -> bool:
     )
 
 
+def _prepare_takes_an_item(function: Callable[..., Any]) -> bool:
+    """Whether ``prepare`` takes the config and one item positionally, then
+    ``on_progress`` as a keyword."""
+    try:
+        parameters = list(inspect.signature(function).parameters.values())
+    except (TypeError, ValueError):
+        return True  # no signature to read (a builtin): trust it
+    kinds = inspect.Parameter
+    positional = [
+        p
+        for p in parameters
+        if p.kind in (kinds.POSITIONAL_ONLY, kinds.POSITIONAL_OR_KEYWORD)
+    ]
+    varargs = any(p.kind is kinds.VAR_POSITIONAL for p in parameters)
+    keywords = any(p.kind is kinds.VAR_KEYWORD for p in parameters) or any(
+        p.name == "on_progress" and p.kind is not kinds.POSITIONAL_ONLY
+        for p in parameters
+    )
+    if varargs and len(positional) < 2:
+        return keywords
+    if len(positional) < 2:
+        return False
+    item = positional[1]  # after the config: the item, which has no default
+    return (
+        item.name != "on_progress"
+        and item.default is inspect.Parameter.empty
+        and keywords
+    )
+
+
 def check_contract(
     contract: SetupContract,
     examples: Sequence[dict[str, Any]],
@@ -592,6 +625,11 @@ def check_contract(
         raise ContractViolation(
             f"{deaf} take no `base_dir` keyword: the folder a relative path of the config "
             "is relative to"
+        )
+    if not _prepare_takes_an_item(contract.prepare):
+        raise ContractViolation(
+            "prepare() does not take `(config, item, *, on_progress=None, base_dir=None)`: "
+            "it prepares one item per call"
         )
     try:
         raw = contract.config_schema()

@@ -13,7 +13,7 @@ tests:
 
 # UI
 
-**Status:** Updated
+**Status:** Implemented
 
 ## Purpose
 

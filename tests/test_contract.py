@@ -162,8 +162,9 @@ class SpeechLib:
     def prepare(
         self,
         config: dict[str, Any],
-        on_progress: Any = None,
+        item: str,
         *,
+        on_progress: Any = None,
         base_dir: str | None = None,
     ) -> None:
         return None
@@ -588,3 +589,29 @@ def test_a_function_that_takes_no_base_dir_is_a_breach():
 
     assert "['probe'] take no `base_dir` keyword" in _breach(Deaf())
     _check(Open(), None)  # a `**kwargs` takes it
+
+
+def test_a_prepare_that_takes_no_item_is_a_breach():
+    class Whole(SpeechLib):
+        # The shape before one item per call: the whole config prepared at once.
+        def prepare(  # type: ignore[override]
+            self,
+            config: dict[str, Any],
+            on_progress: Any = None,
+            *,
+            base_dir: str | None = None,
+        ) -> None:
+            return None
+
+    class Positional(SpeechLib):
+        def prepare(  # type: ignore[override]
+            self,
+            config: dict[str, Any],
+            item: str,
+            on_progress: Any = None,
+            base_dir: str | None = None,
+        ) -> None:
+            return None
+
+    assert "prepare() does not take `(config, item" in _breach(Whole())
+    _check(Positional(), None)  # on_progress may also be given by name
