@@ -66,33 +66,37 @@ def setup_report(items: Sequence[SetupItem]) -> str:
 SHADOWED = "✅ the shell (the folder's .env also sets it, unused)"
 
 
+NOT_NAMED = "— not named by the current config"
+
+
 def secrets_report(
     variables: Sequence[tuple[SecretVariable, Sequence[str]]],
-    others: Sequence[str] = (),
+    others: Sequence[SecretVariable] = (),
 ) -> str:
-    """The variables the config names, each with where its value comes from; then the
-    other variables the folder's ``.env`` sets (*others*), by name."""
+    """One table: the variables the config names, each with where its value comes from
+    and the fields naming it; then the other variables the folder's ``.env`` sets
+    (*others*), named by no field of the current config. Names only, never a value."""
+    rows = [
+        (variable, ", ".join(f"`{p}`" for p in pointers))
+        for variable, pointers in variables
+    ]
+    rows += [(variable, NOT_NAMED) for variable in others]
+    if not rows:
+        return (
+            "The current config names no environment variable for a key, and the "
+            "folder's .env sets none."
+        )
+    lines = ["| Variable | Value from | Named by |", "|---|---|---|"]
+    for variable, named_by in rows:
+        source = SHADOWED if variable.shadowed else _SOURCE[variable.source]
+        lines.append(f"| `{variable.name}` | {source} | {named_by} |")
+    parts = ["\n".join(lines)]
     if not variables:
-        parts = ["The current config names no environment variable for a key."]
-    else:
-        lines = ["| Variable | Value from | Named by |", "|---|---|---|"]
-        for variable, pointers in variables:
-            source = SHADOWED if variable.shadowed else _SOURCE[variable.source]
-            lines.append(
-                f"| `{variable.name}` | {source} "
-                f"| {', '.join(f'`{p}`' for p in pointers)} |"
-            )
-        parts = ["\n".join(lines)]
-        if any(variable.shadowed for variable, _ in variables):
-            parts.append(
-                "A variable set in the shell the app was started from wins over the "
-                ".env. To use the .env's value, unset it in your shell profile (and "
-                "start the app again), or remove it from the .env."
-            )
-    if others:
+        parts.insert(0, "The current config names no environment variable for a key.")
+    if any(variable.shadowed for variable, _ in rows):
         parts.append(
-            "**Also in the folder's .env**, not named by the current config: "
-            + ", ".join(f"`{name}`" for name in others)
-            + "."
+            "A variable set in the shell the app was started from wins over the "
+            ".env. To use the .env's value, unset it in your shell profile (and "
+            "start the app again), or remove it from the .env."
         )
     return "\n\n".join(parts)

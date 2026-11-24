@@ -176,7 +176,10 @@ def test_the_secrets_panel_lists_the_env_file_s_other_variables_by_name(
     text = _handler(page, "report")(cloud)
 
     assert "| `CLOUD_VOICE_KEY` | ✅ the folder's .env |" in text
-    assert "not named by the current config: `OLD_KEY`." in text
+    assert (
+        "| `OLD_KEY` | ✅ the folder's .env | — not named by the current config |"
+        in text
+    )
     assert "s3cret" not in text  # names only, never a value
 
 

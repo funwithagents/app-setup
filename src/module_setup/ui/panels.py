@@ -306,7 +306,9 @@ def secrets_panel(model: AppModel, config: gr.State | None = None) -> None:
         current = values[0] if values else model.saved_config()
         variables = model.secret_variables(current)
         named = {variable.name for variable, _ in variables}
-        others = [name for name in model.secrets.file_names() if name not in named]
+        others = model.secrets.variables(
+            name for name in model.secrets.file_names() if name not in named
+        )
         return secrets_report(variables, others)
 
     # On page load, and on each change of the config it follows.
