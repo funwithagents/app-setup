@@ -1,0 +1,90 @@
+# Continuous integration — specs/ci.md.
+#
+# On every pull request and push to main, five jobs side by side, none waiting on
+# another: `check` (lint, format, types) on Linux; `fast-tier` once per supported
+# platform — Linux, macOS, Windows — since the fast tier needs no network and no
+# credentials, and the folder, the .env and the installer meet each platform's paths
+# there; and `browser` on Linux: the panels driven in headless Chromium against the
+# tests' fake library, so no key and no network either. No secret is needed.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The floor of requires-python; setup-uv exports it as UV_PYTHON, which overrides
+  # .python-version (the local dev version) for every uv command (specs/ci.md).
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  check:
+    name: lint, format, types
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Sync (dev and browser groups, against the lock)
+        # The browser group too: pyright checks tests-e2e/, which imports Playwright.
+        run: uv sync --locked --group browser
+      - name: Lint
+        run: uv run ruff check .
+      - name: Format check (code directories only — `ruff format .` reflows Markdown)
+        run: uv run ruff format --check src tests tests-e2e
+      - name: Type check
+        run: uv run pyright
+
+  fast-tier:
+    name: fast tier (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      # One platform's failure leaves the others running.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Sync (dev group, against the lock)
+        run: uv sync --locked
+      - name: Fast tier
+        run: uv run pytest
+
+  browser:
+    name: browser (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Sync (dev and browser groups, against the lock)
+        run: uv sync --locked --group browser
+      - name: Chromium for Playwright, with the system libraries it needs
+        run: uv run playwright install --with-deps chromium
+      - name: Browser tests
+        # A missing Playwright or Chromium fails here instead of skipping: the tests
+        # cannot pass by not running (specs/ci.md).
+        env:
+          MODULE_SETUP_E2E_REQUIRE_BROWSER: "1"
+        run: uv run pytest tests-e2e -rs --durations=5

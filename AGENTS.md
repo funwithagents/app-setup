@@ -15,7 +15,8 @@ Where things live. This is a coarse, module-level map — for the full file inve
 | `specs/` | Pre-implementation design docs, one per concept, each with a `**Status:**` — indexed by [specs/_index.md](specs/_index.md) |
 | `plans/` | Implementation plans turning settled specs into buildable steps — indexed by [plans/_index.md](plans/_index.md) |
 | `tests/` | Fast, deterministic, no-network tests; mirrors the `src/module_setup/` module structure (`tests/ui/` for the panels); `fakes.py` is a small library implementing the contract |
-| `tests-e2e/` | Opt-in live tests (not collected by default `pytest`): the panels driven in a headless browser (`uv run --with playwright pytest tests-e2e -rs`, after `uv run --with playwright python -m playwright install chromium`) |
+| `tests-e2e/` | Opt-in live tests (not collected by default `pytest`): the panels driven in a headless browser (`uv sync --group browser`, `uv run playwright install chromium`, then `uv run pytest tests-e2e -rs`) |
+| `.github/workflows/` | The CI workflow: lint, format and types, the fast tier on Linux, macOS and Windows, and the browser tests, on every pull request and push to `main` ([specs/ci.md](specs/ci.md)) |
 
 ### `src/module_setup/` modules
 
@@ -96,4 +97,8 @@ uv run ruff check .
 uv run ruff format src tests tests-e2e   # code dirs only: `ruff format .` also reflows Python blocks in the specs
 uv run pyright
 uv run pytest
+uv sync --group browser && uv run playwright install chromium   # once, for the browser tests
+uv run pytest tests-e2e -rs                                       # the browser tests
 ```
+
+CI runs all of the above on every pull request ([specs/ci.md](specs/ci.md)).

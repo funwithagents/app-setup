@@ -18,6 +18,7 @@ module-setup is the Setup side of an app built from configurable libraries: libr
 | [config-folder.md](config-folder.md) | The app's folder instead of a config file: `config.json` (the current config) and `.env`; the default config written on first launch; where the folder is | Implemented |
 | [secrets.md](secrets.md) | The keys a config names: their source (the shell, which wins, or the folder's `.env`), the `.env` dialect, writing one without ever showing it | Implemented |
 | [ui.md](ui.md) | The panels, behind the `ui` extra, each drawn where an app calls it in its own page: `setup_panel` (the form drawn from each schema, checks, install, downloads, test) and `secrets_panel` | Implemented |
+| [ci.md](ci.md) | Continuous integration: lint, format and types, the fast tier on Linux, macOS and Windows, and the browser tests on Linux (Playwright from a locked `browser` group, a missing browser failing there), on every pull request and push to `main`; no secret | Implemented |
 | _(add concept specs here — see [_spec-template.md](_spec-template.md))_ | | |
 
 Each spec also opens with a YAML **frontmatter** block declaring the `code:` and `tests:` files it governs — the spec → code/tests mapping the spec-drift checks use to scope what they compare. Keep it current when files move, and see [AGENTS.md](../AGENTS.md) ("Spec frontmatter") for the full convention. A spec that is not yet `Implemented` may name the files it *will* govern.
