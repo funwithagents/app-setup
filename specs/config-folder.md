@@ -19,6 +19,7 @@ An app runs from a folder, not from a config file. The folder holds what the Set
 |---|---|
 | `config.json` | The current config: one key per section, each holding that library's own document |
 | `.env` | The secrets ([secrets.md](secrets.md)) |
+| `launch.json` | Whether the app starts its session at launch, for an app with autostart (`{"autostart": bool}`), written once the user chooses ([autostart.md](autostart.md)); apart from the config, so the config stays the app's own sections |
 
 The app may keep files of its own in the folder (its settings, such as whether to start a session at launch); module-setup never reads, writes or removes them.
 

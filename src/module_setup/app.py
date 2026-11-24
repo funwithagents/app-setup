@@ -60,6 +60,9 @@ class App:
     sections: tuple[Section, ...]
     default_config: Mapping[str, Any]
     title: str | None = None
+    # Whether the app starts its session at launch by default; None: the app has no
+    # autostart. The user's choice is kept in the folder's launch.json (specs/autostart.md).
+    autostart: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -218,6 +221,21 @@ class AppModel:
         return self.folder.path
 
     # --- The config.
+
+    def autostart(self) -> bool | None:
+        """Whether the app starts its session at launch: the folder's ``launch.json``, else
+        the app's default; None for an app with no autostart."""
+        if self.app.autostart is None:
+            return None
+        value = self.folder.read_launch().get("autostart")
+        return value if isinstance(value, bool) else self.app.autostart
+
+    def set_autostart(self, on: bool) -> None:
+        """Keep the user's choice in ``launch.json``. Not refused while the config is
+        locked: it only matters at the next launch."""
+        if self.app.autostart is None:
+            raise RuntimeError(f"{self.title} has no autostart.")
+        self.folder.save_launch({**self.folder.read_launch(), "autostart": bool(on)})
 
     def locked(self) -> bool:
         """Whether the app is using the saved config (a session running)."""

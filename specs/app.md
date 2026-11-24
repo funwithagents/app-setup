@@ -35,6 +35,7 @@ class App:
     sections: tuple[Section, ...]
     default_config: Mapping[str, Any]
     title: str | None = None
+    autostart: bool | None = None
 ```
 
 - **`name`** is the default name of the app's folder ([config-folder.md](config-folder.md)) and, unless `title` is given, its title.
@@ -43,6 +44,7 @@ class App:
 - **`contract`** is the contract object, or a function returning it. The function is for a library the host installs only with one of its own extras: while it raises `ImportError`, the section is shown as needing **`host_extra`**, which the page can install; it is tried again after an install.
 - **`when`**, given the whole config, says whether the section is used (a section for one embodiment of an app). A section not used is neither drawn nor checked, and the app does not run it; its document stays in the config, so switching back loses nothing.
 - **`default_config`** is the first config of a new folder, and what "Reset" goes back to.
+- **`autostart`** says the app starts its session at launch by default (`None`: it has no autostart); the user's choice is kept in the folder's `launch.json` ([autostart.md](autostart.md)). `AppModel.autostart()` and `set_autostart(on)` read and write it.
 
 ## The model
 

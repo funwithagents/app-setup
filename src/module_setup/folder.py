@@ -76,6 +76,12 @@ class ConfigFolder:
         return self.path / ".env"
 
     @property
+    def launch_path(self) -> Path:
+        """The launch settings (whether the app starts its session at launch): apart from
+        the config, which stays exactly what the app runs with."""
+        return self.path / "launch.json"
+
+    @property
     def default_config(self) -> dict[str, Any]:
         return copy.deepcopy(self._default)
 
@@ -90,6 +96,16 @@ class ConfigFolder:
 
     def save_config(self, config: Mapping[str, Any]) -> None:
         _write_json(self.config_path, dict(config))
+
+    def read_launch(self) -> dict[str, Any]:
+        """The launch settings; empty while none was saved."""
+        if not self.launch_path.exists():
+            return {}
+        return _read_object(self.launch_path)
+
+    def save_launch(self, settings: Mapping[str, Any]) -> None:
+        self.path.mkdir(parents=True, exist_ok=True)
+        _write_json(self.launch_path, dict(settings))
 
     def reset_config(self) -> dict[str, Any]:
         """Write the default config back as the current one, and return it."""

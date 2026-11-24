@@ -7,9 +7,12 @@ The Setup side of an app built from configurable libraries: choose a module, edi
 ## Using it in an app
 
 ```python
+import argparse
+
 import gradio as gr
 
 from module_setup.app import App, AppModel, Section
+from module_setup.autostart import add_start_arguments, starts_at_launch
 from module_setup.folder import ConfigFolder, default_folder
 from module_setup.ui import secrets_panel, setup_panel
 
@@ -20,7 +23,12 @@ APP = App(
     host="speech-lib",
     sections=(Section("speech", speech_lib.setup),),
     default_config={"speech": {"module": {"type": "local-voice"}}},
+    autostart=True,  # the app starts its session at launch, unless the user says otherwise
 )
+parser = argparse.ArgumentParser()
+add_start_arguments(parser)  # --start / --no-start, for this launch only
+options = parser.parse_args()
+
 # The folder made ready and its .env loaded; the config locked while a session runs.
 model = AppModel(APP, ConfigFolder(default_folder(APP.name), APP.default_config), locked=is_running)
 
@@ -32,8 +40,14 @@ with gr.Blocks() as page:
     with gr.Tab("Secrets"):
         secrets_panel(model, setup.draft)
 
+# The flag, else the folder's launch.json (a checkbox on the Setup panel), else App.autostart.
+if starts_at_launch(model, options.start):
+    start()  # the app's own Start: shows the blockers instead when the saved config has some
+
 page.launch()
 ```
+
+An app that starts its session at launch says so (`App(autostart=True)`); the user's choice is kept in the folder's `launch.json`, apart from the config, and `--start` / `--no-start` override it for one launch ([specs/autostart.md](specs/autostart.md)).
 
 Install with the `ui` extra for the panels; the base install (the contract, the conformance check, the extras, the model) needs no gradio.
 

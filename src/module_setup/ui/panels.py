@@ -189,6 +189,16 @@ def setup_panel(model: AppModel) -> SetupPanel:
         save = gr.Button("Save", variant="primary", scale=0)
         revert = gr.Button("Revert to saved", scale=0)
         reset = gr.Button("Reset to defaults", scale=0)
+    autostart = (
+        gr.Checkbox(
+            label="Start the session when the app launches",
+            info="Saved at once, apart from the config: it takes effect at the next "
+            "launch. --start / --no-start override it for one launch.",
+            interactive=True,
+        )
+        if model.app.autostart is not None
+        else None
+    )
     lock = gr.Markdown()
     notice = gr.Markdown()
     gr.Markdown(REQUIRED)
@@ -204,6 +214,24 @@ def setup_panel(model: AppModel) -> SetupPanel:
 
     # No trigger and no input: on page load only.
     gr.on(None, on_load, outputs=[draft, revision])
+
+    if autostart is not None:
+
+        def on_launch_load() -> bool:
+            return bool(model.autostart())
+
+        gr.on(None, on_launch_load, outputs=[autostart], show_progress="hidden")
+
+        def on_autostart(on: bool) -> str:
+            model.set_autostart(on)
+            return (
+                "The session will start when the app launches."
+                if on
+                else "The session will not start when the app launches."
+            )
+
+        # `input`: the user's change only, not the value set on page load.
+        autostart.input(on_autostart, inputs=[autostart], outputs=[notice])
 
     def on_redraw(config: Config) -> list[Any]:
         used = set(model.used(config))

@@ -49,6 +49,7 @@ Serving the page, the command line, when to start a session (a setting of the ap
 
 **`setup_panel(model) -> SetupPanel`**
 
+- For an app with autostart, a **"Start the session when the app launches"** checkbox next to them, loaded from the folder's `launch.json` and saved at once, enabled while a session runs ([autostart.md](autostart.md)).
 - **Save**, **Revert to saved**, **Reset to defaults**. Save and Reset are disabled, with a line saying a session is running, while the model is locked (`AppModel.locked`, polled every second).
 - A line saying that a field marked `*` must be filled in (the schema's `required`) and the others have a default (shown in the field's hover text) or can stay empty.
 - **One block per section**, in the app's order, shown while the config uses it (`when`): its title (the app's `Section(title=…)`, else its library's, never its key), its form, then **its own checks**, acting on that section alone: **Check** shows its problems and a table of what the machine is missing for it; **Install missing extras** installs the host extras that carry what it misses, streaming uv's output; **Download missing files** runs its `prepare`, streaming its progress; **Test** runs its `probe`. The output box appears with the first action. All four act on the form's current values, saved or not. A section is one library's contract, so what it needs is installed, downloaded and tested with it; Save, Revert and Reset stay for the whole config, one file and one draft, since sections can depend on each other (`when`).

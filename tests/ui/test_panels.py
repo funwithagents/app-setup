@@ -219,3 +219,21 @@ def test_each_section_has_its_own_checks_acting_on_it_alone(tmp_path: Path) -> N
     assert (hidden[0]["visible"], hidden[4]["visible"]) == (True, False)
     assert "/backup/module/voice_id" in shown[5]
     assert hidden[5] == ""
+
+
+def test_an_app_with_autostart_gets_its_checkbox_saved_at_once(tmp_path: Path) -> None:
+    model = _model(tmp_path, autostart=True)
+    with gr.Blocks() as page:
+        setup_panel(model)
+    with gr.Blocks() as without:
+        setup_panel(_model(tmp_path / "other"))
+
+    (checkbox,) = [b for b in page.blocks.values() if isinstance(b, gr.Checkbox)]
+    loaded = _handler(page, "on_launch_load")()
+    note = _handler(page, "on_autostart")(False)
+
+    assert checkbox.label == "Start the session when the app launches"
+    assert loaded is True  # the app's default, until the user chooses
+    assert note == "The session will not start when the app launches."
+    assert model.autostart() is False
+    assert not [b for b in without.blocks.values() if isinstance(b, gr.Checkbox)]
