@@ -37,7 +37,9 @@ LOCKED = "🔒 A session is running: stop it to change the config."
 
 # What a field's mark means: a field with a default shows it in its hover text instead.
 REQUIRED = (
-    "Fields marked * must be filled in; the others have a default or can stay empty."
+    "Fields marked * must be filled in; the others have a default or can stay empty. "
+    "A value in grey is the default: not set, so the library's own applies, and not "
+    "saved. Only what you set is saved."
 )
 
 
