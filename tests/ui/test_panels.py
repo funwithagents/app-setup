@@ -157,13 +157,13 @@ def test_the_secrets_panel_reads_the_config_it_follows_else_the_saved_one(
     with gr.Blocks() as alone:
         secrets_panel(model)
 
-    assert "`CLOUD_VOICE_KEY`" in _handler(following, "report")(cloud)
-    assert "names no environment variable" in _handler(alone, "report")()
+    assert "`CLOUD_VOICE_KEY`" in _handler(following, "on_load")(cloud)[0]
+    assert "names no environment variable" in _handler(alone, "on_load")()[0]
     model.save(cloud)
-    assert "`CLOUD_VOICE_KEY`" in _handler(alone, "report")()
+    assert "`CLOUD_VOICE_KEY`" in _handler(alone, "on_load")()[0]
 
 
-def test_the_secrets_panel_lists_the_env_file_s_other_variables_by_name(
+def test_the_secrets_panel_keeps_the_env_file_s_variables_out_of_the_config_s_table(
     tmp_path: Path,
 ) -> None:
     model = _model(tmp_path)
@@ -173,13 +173,10 @@ def test_the_secrets_panel_lists_the_env_file_s_other_variables_by_name(
     with gr.Blocks() as page:
         secrets_panel(model, gr.State(cloud))
 
-    text = _handler(page, "report")(cloud)
+    text = _handler(page, "on_load")(cloud)[0]
 
     assert "| `CLOUD_VOICE_KEY` | ✅ the folder's .env |" in text
-    assert (
-        "| `OLD_KEY` | ✅ the folder's .env | — not named by the current config |"
-        in text
-    )
+    assert "OLD_KEY" not in text  # listed with the .env's own variables instead
     assert "s3cret" not in text  # names only, never a value
 
 

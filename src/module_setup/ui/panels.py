@@ -19,7 +19,12 @@ import gradio as gr
 
 from module_setup.app import AppModel, InstallError
 from module_setup.ui.form import render_section, section_title
-from module_setup.ui.report import config_report, secrets_report, setup_report
+from module_setup.ui.report import (
+    config_report,
+    env_file_rows,
+    secrets_report,
+    setup_report,
+)
 
 __all__ = ["SetupPanel", "secrets_panel", "setup_panel"]
 
@@ -279,71 +284,109 @@ def setup_panel(model: AppModel) -> SetupPanel:
 
 
 def secrets_panel(model: AppModel, config: gr.State | None = None) -> None:
-    """Draw the Secrets panel of *model*'s app here: the variables the config names, each
-    with where its value comes from, and a form to save one to the folder's ``.env``.
+    """Draw the Secrets panel of *model*'s app here, in two parts: the keys the config
+    names, each with where its value comes from, and a form to save one to the folder's
+    ``.env``; then every variable that ``.env`` sets, each with what uses it and a
+    Remove button. Names only, never a value.
 
     *config* is the config the variables are read from: a Setup panel's ``draft`` follows
     the edits as they are made; without it, the saved config is read on each refresh.
     """
+    gr.Markdown("### Keys the config uses")
     gr.Markdown(
-        "The keys the config names, and where each comes from. A value typed here is "
-        f"saved in `{model.folder.env_path}` and never shown again; a variable set in the "
-        "shell wins over the file."
+        "Where each key comes from. A value typed here is saved in the folder's .env and "
+        "never shown again; a variable set in the shell wins over the file."
     )
     secrets_md = gr.Markdown()
-    refresh = gr.Button("Refresh", scale=0)
     with gr.Row():
         variable = gr.Textbox(label="Variable", scale=1, interactive=True)
         secret = gr.Textbox(label="Value", type="password", scale=2, interactive=True)
-    with gr.Row():
-        save_secret = gr.Button("Save to the folder's .env", scale=0)
-        remove_secret = gr.Button("Remove from the .env", scale=0)
+    save_secret = gr.Button("Save to the folder's .env", scale=0)
     secret_notice = gr.Markdown()
+
+    gr.Markdown(f"### In the folder's .env\n\n`{model.folder.env_path}`")
+    # Changes each time the file may have changed: the list below is drawn again.
+    env_revision = gr.State(0)
+    refresh = gr.Button("Refresh", scale=0)
 
     inputs = [config] if config is not None else []
 
+    def current(values: tuple[Config, ...]) -> Config:
+        return values[0] if values else model.saved_config()
+
     def report(*values: Config) -> str:
-        current = values[0] if values else model.saved_config()
-        variables = model.secret_variables(current)
-        named = {variable.name for variable, _ in variables}
-        others = model.secrets.variables(
-            name for name in model.secrets.file_names() if name not in named
-        )
-        return secrets_report(variables, others)
+        return secrets_report(model.secret_variables(current(values)))
+
+    def file_rows(values: tuple[Config, ...]) -> list[tuple[str, str]]:
+        named = {
+            variable.name: pointers
+            for variable, pointers in model.secret_variables(current(values))
+        }
+        return env_file_rows(model.secrets.variables(model.secrets.file_names()), named)
+
+    @gr.render(
+        inputs=[env_revision, *inputs],
+        triggers=[
+            env_revision.change,
+            *([config.change] if config is not None else []),
+        ],
+    )
+    def env_file(revision: int, *values: Config) -> None:
+        rows = file_rows(values)
+        if not rows:
+            gr.Markdown("The folder's .env sets no variable.")
+        for name, note in rows:
+            with gr.Row(equal_height=True):
+                gr.Markdown(f"`{name}` — {note}")
+                remove = gr.Button("Remove", size="sm", scale=0)
+
+            def on_remove(
+                rev: int, *values: Config, name: str = name
+            ) -> tuple[Any, ...]:
+                model.secrets.remove(name)
+                return f"`{name}` removed from the .env.", report(*values), rev + 1
+
+            remove.click(
+                on_remove,
+                inputs=[env_revision, *inputs],
+                outputs=[secret_notice, secrets_md, env_revision],
+            )
+
+    def on_load(*values: Config) -> tuple[str, int]:
+        return report(*values), next(_loads)
 
     # On page load, and on each change of the config it follows.
-    gr.on(None, report, inputs=inputs, outputs=[secrets_md], show_progress="hidden")
-    refresh.click(report, inputs=inputs, outputs=[secrets_md])
+    gr.on(
+        None,
+        on_load,
+        inputs=inputs,
+        outputs=[secrets_md, env_revision],
+        show_progress="hidden",
+    )
 
-    def on_save(name: str, value: str, *values: Config) -> tuple[Any, Any, Any]:
+    def on_refresh(rev: int, *values: Config) -> tuple[str, int]:
+        return report(*values), rev + 1
+
+    refresh.click(
+        on_refresh, inputs=[env_revision, *inputs], outputs=[secrets_md, env_revision]
+    )
+
+    def on_save(name: str, value: str, rev: int, *values: Config) -> tuple[Any, ...]:
         name = (name or "").strip()
         try:
             source = model.secrets.set(name, value or "")
         except ValueError as exc:
-            return f"⚠️ {exc}", gr.skip(), value
+            return f"⚠️ {exc}", gr.skip(), value, gr.skip()
         note = (
             f"✅ `{name}` saved in the .env, but the shell's value is the one used: "
             "unset it in your shell profile to use this one."
             if source == "shell"
             else f"✅ `{name}` saved."
         )
-        return note, report(*values), ""
+        return note, report(*values), "", rev + 1
 
     save_secret.click(
         on_save,
-        inputs=[variable, secret, *inputs],
-        outputs=[secret_notice, secrets_md, secret],
-    )
-
-    def on_remove(name: str, *values: Config) -> tuple[Any, Any]:
-        name = (name or "").strip()
-        if not name:
-            return "⚠️ Name the variable to remove.", gr.skip()
-        model.secrets.remove(name)
-        return f"`{name}` removed from the .env.", report(*values)
-
-    remove_secret.click(
-        on_remove,
-        inputs=[variable, *inputs],
-        outputs=[secret_notice, secrets_md],
+        inputs=[variable, secret, env_revision, *inputs],
+        outputs=[secret_notice, secrets_md, secret, env_revision],
     )

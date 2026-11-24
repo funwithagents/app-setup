@@ -156,3 +156,21 @@ def test_the_keys_follow_the_draft_and_save_waits_for_the_session_to_stop(
     served.running = False
     page.get_by_text("A session is running").wait_for(state="hidden")
     assert save.is_enabled()
+
+
+def test_a_variable_of_the_env_file_is_removed_from_its_row(
+    served: Served, browser: object
+) -> None:
+    env_path = served.folder.env_path
+    env_path.write_text('OLD_KEY="x1"\nKEEP_KEY="x2"\n')
+    page = _open_setup(served, browser)
+    page.get_by_role("tab", name="Keys").click()
+    page.get_by_text("not named by the current config").first.wait_for()
+
+    row = page.locator(".row", has_text="OLD_KEY").last
+    row.get_by_role("button", name="Remove").click()
+    page.get_by_text("removed from the .env.").wait_for()
+
+    assert env_path.read_text() == 'KEEP_KEY="x2"\n'
+    page.get_by_text("KEEP_KEY").first.wait_for()
+    assert page.get_by_role("button", name="Remove").count() == 1

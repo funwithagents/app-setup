@@ -2,6 +2,7 @@ from module_setup.app import Problem, SetupItem
 from module_setup.secrets import SecretVariable
 from module_setup.ui.report import (
     config_report,
+    env_file_rows,
     secrets_report,
     setup_report,
 )
@@ -70,26 +71,31 @@ def test_the_secrets_table_names_each_source() -> None:
     assert "names no environment variable" in secrets_report([])
 
 
-def test_a_value_the_shell_shadows_and_the_file_s_other_variables_are_in_the_table() -> (
-    None
-):
+def test_a_value_the_shell_shadows_is_said_with_how_to_use_the_file_s() -> None:
     text = secrets_report(
-        [(SecretVariable("A", "shell", in_file=True), ["/s/module/api_key_env"])],
-        others=[
-            SecretVariable("OLD_KEY", "file", in_file=True),
-            SecretVariable("BOTH", "shell", in_file=True),
-        ],
+        [(SecretVariable("A", "shell", in_file=True), ["/s/module/api_key_env"])]
     )
 
     assert "| `A` | ✅ the shell (the folder's .env also sets it, unused) |" in text
     assert "unset it in your shell profile" in text
-    assert (
-        "| `OLD_KEY` | ✅ the folder's .env | — not named by the current config |"
-        in text
+    assert "unset it" not in secrets_report([(SecretVariable("B", "file"), ["/s/x"])])
+
+
+def test_each_variable_of_the_env_file_says_what_uses_it() -> None:
+    rows = env_file_rows(
+        [
+            SecretVariable("KEY", "file", in_file=True),
+            SecretVariable("OLD_KEY", "file", in_file=True),
+            SecretVariable("BOTH", "shell", in_file=True),
+        ],
+        {"KEY": ["/s/module/api_key_env", "/t/module/api_key_env"]},
     )
-    assert (
-        "| `BOTH` | ✅ the shell (the folder's .env also sets it, unused) | —" in text
-    )
-    # With no variable named, the file's variables still have their rows.
-    alone = secrets_report([], others=[SecretVariable("OLD_KEY", "file", in_file=True)])
-    assert "names no environment variable" in alone and "| `OLD_KEY` |" in alone
+
+    assert rows == [
+        ("KEY", "used by `/s/module/api_key_env`, `/t/module/api_key_env`"),
+        ("OLD_KEY", "not named by the current config"),
+        (
+            "BOTH",
+            "not named by the current config — unused: the shell sets it too, and wins",
+        ),
+    ]
