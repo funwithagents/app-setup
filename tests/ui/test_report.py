@@ -44,14 +44,14 @@ def test_the_setup_table_says_what_to_do_about_each_missing_item() -> None:
 
     assert text.startswith("❌ **2 thing(s) missing on this machine.**")
     assert (
-        "| speech | X extra | ❌ missing | Not installed. Install: `speech-x`. |"
-        in text
+        "| X extra | ❌ missing | Not installed. **Install missing extras** installs it "
+        "(`speech-x`). |" in text
     )
     assert (
-        "| speech | Voice Ada | ❌ missing | Not downloaded. Prepare downloads it. |"
+        "| Voice Ada | ❌ missing | Not downloaded. **Download missing files** gets it. |"
         in text
     )
-    assert "| speech | K | ✅ ready | Set. |" in text
+    assert "| K | ✅ ready | Set. |" in text
     assert "Voice \\| Bo" in text
     assert setup_report([]) == "✅ **This machine needs nothing more for this config.**"
     assert setup_report(items[2:3]).startswith("✅ **This machine is ready")

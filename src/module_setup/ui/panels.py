@@ -79,7 +79,7 @@ class _Section:
     """One section's block on the panel: what the panel's own events update."""
 
     name: str
-    block: gr.Group
+    block: gr.Column
     config_md: gr.Markdown
     setup_md: gr.Markdown
     output: gr.Textbox
@@ -90,7 +90,8 @@ def _section_block(
 ) -> _Section:
     """Section *name*: its title, its form, and its own Check, Install, Download and
     Test, acting on it alone, with their results under them."""
-    with gr.Group() as block:
+    # A panel-styled column, not a `gr.Group`: inside a group, gradio draws buttons flat.
+    with gr.Column(variant="panel") as block:
         gr.Markdown(f"### {section_title(model, name)}")
 
         @gr.render(inputs=[draft], triggers=[revision.change])

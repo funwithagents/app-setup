@@ -37,6 +37,8 @@ def config_report(problems: Sequence[Problem]) -> str:
 
 
 def setup_report(items: Sequence[SetupItem]) -> str:
+    """What one section needs on this machine, item by item (the Setup panel shows it
+    under that section, so the table has no section column)."""
     if not items:
         return "✅ **This machine needs nothing more for this config.**"
     missing = [item for item in items if item.status == "missing"]
@@ -45,15 +47,17 @@ def setup_report(items: Sequence[SetupItem]) -> str:
         if not missing
         else f"❌ **{len(missing)} thing(s) missing on this machine.**"
     )
-    lines = [header, "", "| Section | What | Status | Detail |", "|---|---|---|---|"]
+    lines = [header, "", "| What | Status | Detail |", "|---|---|---|"]
     for item in items:
         detail = item.detail
         if item.installable:
-            detail += f" Install: `{', '.join(item.host_extras[:1])}`."
+            detail += (
+                f" **Install missing extras** installs it (`{item.host_extras[0]}`)."
+            )
         elif item.preparable and item.status != "ready":
-            detail += " Prepare downloads it."
+            detail += " **Download missing files** gets it."
         lines.append(
-            f"| {_cell(item.section)} | {_cell(item.title)} "
+            f"| {_cell(item.title)} "
             f"| {_STATUS.get(item.status, item.status)} | {_cell(detail)} |"
         )
     return "\n".join(lines)
