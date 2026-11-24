@@ -57,4 +57,4 @@ The folder does not validate the config: an invalid config can be saved, and the
 ## Open questions
 
 1. **Several configs per app** (profiles) are not supported: one folder is one config. Running the app with another `--folder` is the way to keep two.
-2. **Relative paths in a section** (a voice file) resolve against what each library is told: the app runs them with the folder (`AppModel.path`), and a library that takes a `base_dir` is given it there.
+2. **Relative paths in a section** (a voice file) resolve against the folder: module-setup passes it to the library's setup functions as `base_dir` ([module-contract.md](module-contract.md), "Relative paths"), and the app gives it to the library's loader when it builds its runtime (`AppModel.path`).

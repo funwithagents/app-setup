@@ -154,16 +154,28 @@ class SpeechLib:
             )
         return problems
 
-    def check_setup(self, config: dict[str, Any]) -> list[dict[str, Any]]:
+    def check_setup(
+        self, config: dict[str, Any], *, base_dir: str | None = None
+    ) -> list[dict[str, Any]]:
         return []
 
-    def prepare(self, config: dict[str, Any], on_progress: Any = None) -> None:
+    def prepare(
+        self,
+        config: dict[str, Any],
+        on_progress: Any = None,
+        *,
+        base_dir: str | None = None,
+    ) -> None:
         return None
 
-    def options(self, name: str, config: dict[str, Any]) -> list[dict[str, Any]]:
+    def options(
+        self, name: str, config: dict[str, Any], *, base_dir: str | None = None
+    ) -> list[dict[str, Any]]:
         return []
 
-    def probe(self, config: dict[str, Any]) -> dict[str, Any]:
+    def probe(
+        self, config: dict[str, Any], *, base_dir: str | None = None
+    ) -> dict[str, Any]:
         return {"ok": True, "message": "Nothing to run.", "duration_s": 0.0}
 
 
@@ -563,3 +575,16 @@ def test_required_extras_is_probed_on_each_module_alone():
     assert {"module": {"type": "local-voice"}} in seen
     assert {"module": {"type": "cloud-voice"}} in seen
     assert {} in seen
+
+
+def test_a_function_that_takes_no_base_dir_is_a_breach():
+    class Deaf(SpeechLib):
+        def probe(self, config: dict[str, Any]) -> dict[str, Any]:  # type: ignore[override]
+            return {"ok": True, "message": "", "duration_s": 0.0}
+
+    class Open(SpeechLib):
+        def probe(self, config: dict[str, Any], **_: Any) -> dict[str, Any]:  # type: ignore[override]
+            return {"ok": True, "message": "", "duration_s": 0.0}
+
+    assert "['probe'] take no `base_dir` keyword" in _breach(Deaf())
+    _check(Open(), None)  # a `**kwargs` takes it

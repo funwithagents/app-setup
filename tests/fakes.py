@@ -108,6 +108,8 @@ class SpeechLib:
         self.installed = {"local-voice": True, "cloud-voice": True}
         self.downloaded: set[str] = set()
         self.probed: list[dict[str, Any]] = []
+        # The `base_dir` each machine-facing call was given, by function name.
+        self.base_dirs: dict[str, str | None] = {}
 
     def config_schema(self) -> dict[str, Any]:
         return schema()
@@ -127,8 +129,12 @@ class SpeechLib:
             return [{"path": "/module/voice_id", "message": "voice_id is required"}]
         return []
 
-    def check_setup(self, config: dict[str, Any]) -> list[dict[str, Any]]:
+    def check_setup(
+        self, config: dict[str, Any], *, base_dir: str | None = None
+    ) -> list[dict[str, Any]]:
         import os
+
+        self.base_dirs["check_setup"] = base_dir
 
         kind = config["module"]["type"]
         ok = self.installed[kind]
@@ -167,13 +173,23 @@ class SpeechLib:
             )
         return items
 
-    def prepare(self, config: dict[str, Any], on_progress: Any = None) -> None:
+    def prepare(
+        self,
+        config: dict[str, Any],
+        on_progress: Any = None,
+        *,
+        base_dir: str | None = None,
+    ) -> None:
+        self.base_dirs["prepare"] = base_dir
         voice = config["module"].get("voice", "Ada")
         if on_progress is not None:
             on_progress({"id": f"weights:{voice}", "fraction": 1.0, "message": "done"})
         self.downloaded.add(voice)
 
-    def options(self, name: str, config: dict[str, Any]) -> list[dict[str, Any]]:
+    def options(
+        self, name: str, config: dict[str, Any], *, base_dir: str | None = None
+    ) -> list[dict[str, Any]]:
+        self.base_dirs["options"] = base_dir
         if name != "voices":
             return []
         return [
@@ -181,6 +197,9 @@ class SpeechLib:
             {"label": "Cy (fr)", "fields": {"voice": "Cy", "speed": 1.2}},
         ]
 
-    def probe(self, config: dict[str, Any]) -> dict[str, Any]:
+    def probe(
+        self, config: dict[str, Any], *, base_dir: str | None = None
+    ) -> dict[str, Any]:
+        self.base_dirs["probe"] = base_dir
         self.probed.append(copy.deepcopy(config))
         return {"ok": True, "message": "Spoke.", "duration_s": 0.1}
