@@ -1,6 +1,6 @@
 ---
 code:
-  - src/module_setup/contract.py
+  - src/app_setup/contract.py
 tests:
   - tests/test_contract.py
 ---
@@ -11,16 +11,16 @@ tests:
 
 ## Purpose
 
-The contract is what a library implements so that an app can set it up without knowing it: which modules it offers, what each one's config looks like, which optional dependency a config needs, what it needs on the machine. It is the one interface between the libraries and module-setup, and every library builds against it, so it is specified before anything else. Vocabulary (app, session, host, library, module, section, requirement, item) is in [_overview.md](_overview.md).
+The contract is what a library implements so that an app can set it up without knowing it: which modules it offers, what each one's config looks like, which optional dependency a config needs, what it needs on the machine. It is the one interface between the libraries and app-setup, and every library builds against it, so it is specified before anything else. Vocabulary (app, session, host, library, module, section, requirement, item) is in [_overview.md](_overview.md).
 
 Two rules shape it:
 
-- **A library declares, it does not act.** It never installs a package and never runs uv. Only the host knows its own extras and its lock, so installing is module-setup's job ([extras.md](extras.md)).
-- **Plain data, no shared types.** A library imports nothing from module-setup. What it returns is JSON-compatible: dicts, lists, strings, numbers, booleans, `None`. A library's own code can therefore implement the contract with no new dependency.
+- **A library declares, it does not act.** It never installs a package and never runs uv. Only the host knows its own extras and its lock, so installing is app-setup's job ([extras.md](extras.md)).
+- **Plain data, no shared types.** A library imports nothing from app-setup. What it returns is JSON-compatible: dicts, lists, strings, numbers, booleans, `None`. A library's own code can therefore implement the contract with no new dependency.
 
 ## The contract object
 
-A contract is any object with the seven callables below. A Python module qualifies, and the convention is one module per library named `setup` (`speech_lib.setup`). module-setup types it with a `Protocol` (`SetupContract`), matched structurally.
+A contract is any object with the seven callables below. A Python module qualifies, and the convention is one module per library named `setup` (`speech_lib.setup`). app-setup types it with a `Protocol` (`SetupContract`), matched structurally.
 
 ```python
 def config_schema() -> dict: ...
@@ -36,9 +36,9 @@ def probe(config: dict, *, base_dir: str | None = None) -> dict: ...
 
 `config` is always the library's own config document — the object its loader's `from_dict` takes — never the whole file of an app that composes several libraries.
 
-**Relative paths: `base_dir`.** A config may name files by relative paths (a voice file, a prompt file, a model path). The four functions that look at the machine take `base_dir`, the folder those paths are relative to, and resolve them against it exactly as the library's loader does when the app builds its runtime from the same config: module-setup passes the app's folder (`AppModel.path`), where `config.json` lives, and the app gives its loader that same folder. So **Check**, **Download**, **Test** and **Start** look at the same file. `None` (a caller with no folder) means the working directory. A library with no path in its config accepts the keyword and ignores it; `check_contract` refuses a function that does not take it. The three functions that never look at the machine (`config_schema`, `required_extras`, `check_config`) take none: whether a path is well formed does not depend on where it points.
+**Relative paths: `base_dir`.** A config may name files by relative paths (a voice file, a prompt file, a model path). The four functions that look at the machine take `base_dir`, the folder those paths are relative to, and resolve them against it exactly as the library's loader does when the app builds its runtime from the same config: app-setup passes the app's folder (`AppModel.path`), where `config.json` lives, and the app gives its loader that same folder. So **Check**, **Download**, **Test** and **Start** look at the same file. `None` (a caller with no folder) means the working directory. A library with no path in its config accepts the keyword and ignores it; `check_contract` refuses a function that does not take it. The three functions that never look at the machine (`config_schema`, `required_extras`, `check_config`) take none: whether a path is well formed does not depend on where it points.
 
-All seven are synchronous. module-setup calls the slow ones (`check_setup`, `prepare`, `options`, `probe`) off the page's thread.
+All seven are synchronous. app-setup calls the slow ones (`check_setup`, `prepare`, `options`, `probe`) off the page's thread.
 
 What each answers, in the order an app uses them:
 
@@ -79,7 +79,7 @@ What each may rely on:
 }
 ```
 
-- `contract` — the contract version the library implements, `1`. module-setup refuses a version it does not know, naming it.
+- `contract` — the contract version the library implements, `1`. app-setup refuses a version it does not know, naming it.
 - `distribution` — the library's distribution name, as in its `pyproject.toml`.
 - `title` — the section's heading in the form.
 - `schema` — the config document as a JSON Schema, restricted to the subset below.
@@ -88,7 +88,7 @@ What each may rely on:
 
 ### The schema is for the form, not for validation
 
-The schema says what to draw: the fields, their kind, their default, their allowed values, their help text. It is not the authority on whether a config is valid: `check_config` is. module-setup never validates a config against the schema, so it needs no JSON Schema validator, and a rule a schema cannot express (exactly one of `system_prompt` and `system_prompt_file`) simply lives in `validate`.
+The schema says what to draw: the fields, their kind, their default, their allowed values, their help text. It is not the authority on whether a config is valid: `check_config` is. app-setup never validates a config against the schema, so it needs no JSON Schema validator, and a rule a schema cannot express (exactly one of `system_prompt` and `system_prompt_file`) simply lives in `validate`.
 
 The two must still agree. The conformance check (below) verifies what can be verified: defaults and examples pass `check_config`, and the keys the schema names are keys `validate` accepts.
 
@@ -106,7 +106,7 @@ The two must still agree. The conformance check (below) verifies what can be ver
 | `oneOf` | A choice between modules (below) |
 | `additionalProperties: true` | A free-form object (keyword arguments passed through to a provider): edited as raw JSON |
 
-Anything else in a schema is an error when module-setup parses the description, naming the keyword and its path, so that a library cannot ship a schema the form silently misrenders.
+Anything else in a schema is an error when app-setup parses the description, naming the keyword and its path, so that a library cannot ship a schema the form silently misrenders.
 
 **An optional object is a switch.** An object-typed field that is not `required` (a voice-activity gate that can be left out) is drawn with an enable box: off means the key is absent from the config.
 
@@ -155,7 +155,7 @@ A module choice is an object schema with a `oneOf`, each branch being one module
 
 (An illustrative speech library, `speech-lib`, used in the examples of this spec.)
 
-- The **discriminator** is the one property that is a `const` in every branch, with a different scalar value in each. module-setup finds it; it is not named separately, and it is declared in the branches only. Every branch has a `title`.
+- The **discriminator** is the one property that is a `const` in every branch, with a different scalar value in each. app-setup finds it; it is not named separately, and it is declared in the branches only. Every branch has a `title`.
 - The object's own `properties` hold the fields common to every branch; a branch adds its own, under names the common ones do not use. This is how WICA's flat `agent` object is described: `model`, `system_prompt_file` and the rest are common, `provider` discriminates, `base_url` and `hf_provider` sit in their provider's branch.
 - The form draws a dropdown of the branch titles and, under it, the selected branch's fields. Switching branch keeps the values of the fields common to every branch and drops the old branch's own, even those the new branch has under the same name: a voice id of one provider means nothing to another.
 
@@ -185,7 +185,7 @@ The optional dependencies this config needs, each a requirement string naming **
 It is a function of the config, not an annotation on the schema, because what decides a requirement is not always a module choice: a robot library's `sim` extra can follow a plain `backend` field, and one module can pick between two extras by platform.
 
 - **It reads only the fields that decide.** It is called on configs that are incomplete or invalid — the form asks "what would this need?" for each module of a dropdown, before the user has filled anything — so it ignores everything else and never raises. An unknown module yields `[]`; `check_config` is what reports it.
-- **It says what the config needs, not whether it is installed.** Whether a requirement is installed, and whether it can be on this platform, is read from package metadata by module-setup ([extras.md](extras.md)), with no code in the library.
+- **It says what the config needs, not whether it is installed.** Whether a requirement is installed, and whether it can be on this platform, is read from package metadata by app-setup ([extras.md](extras.md)), with no code in the library.
 
 ## `check_config`
 
@@ -233,13 +233,13 @@ Everything this config needs on **this machine** to run, each as an item. `[]` w
 
 The items, in this order:
 
-1. **Extras** — one item per extra the config needs (`id` `extra:<requirement>`), never preparable. The library finds out by **trying the imports** the selected module needs, which is what will run: a missing package, a broken install, a version missing a symbol, a missing native library all show here. The detail of a missing one is the library's install hint. Installing is the host's business (module-setup's [extras.md](extras.md)), which also tells, from package metadata, whether the extra can be installed on this platform at all.
+1. **Extras** — one item per extra the config needs (`id` `extra:<requirement>`), never preparable. The library finds out by **trying the imports** the selected module needs, which is what will run: a missing package, a broken install, a version missing a symbol, a missing native library all show here. The detail of a missing one is the library's install hint. Installing is the host's business (app-setup's [extras.md](extras.md)), which also tells, from package metadata, whether the extra can be installed on this platform at all.
 2. **Keys** — one item per environment variable the config names for a secret (an `x-secret-env` field), `ready` when it is set and non-empty, else `missing`, never preparable. A key written in the config itself needs no item. Whether the provider *accepts* the key is not checked here.
 3. **Files** — model weights, voice files, a local file the config points at. Only once the extras are installed: looking them up may need the provider's library. Preparable when the library can download them; a local path the config names is `ready` or `missing` and never preparable.
 
 It works on the base install (a missing extra is one of its answers), and on a config `check_config` accepts. It is **local and fast**: it imports, reads the environment, looks at caches, files and the path, and makes no network call. Importing a heavy provider can take a second or two; the import stays loaded in the process, which a session starting next would pay anyway.
 
-The environment it reads is the process's: an app that keeps keys in a file loads them into the environment before calling it (module-setup's app does). Start is enabled when no item is `missing`. An `unknown` item does not block it.
+The environment it reads is the process's: an app that keeps keys in a file loads them into the environment before calling it (app-setup's app does). Start is enabled when no item is `missing`. An `unknown` item does not block it.
 
 ## `prepare`
 
@@ -288,17 +288,17 @@ A library with nothing worth running for a config returns `ok: true` and says so
 
 A library that embeds another's config (a robot library carrying its voice's config) builds its contract from the other's: its schema places the embedded schema at that property, and its `required_extras`, `check_config`, `check_setup`, `prepare`, `options` and `probe` delegate for that part, re-rooting `path`s and keeping requirement strings as they are.
 
-A host does the same one level up: its app config is one section per library, and module-setup composes the sections' contracts ([config-folder.md](config-folder.md), [app.md](app.md)). A host's own sections (settings no library owns) are described by a contract the host writes itself, in the same shape.
+A host does the same one level up: its app config is one section per library, and app-setup composes the sections' contracts ([config-folder.md](config-folder.md), [app.md](app.md)). A host's own sections (settings no library owns) are described by a contract the host writes itself, in the same shape.
 
 A section whose *library* is itself optional for the host (an app that installs its speech library only with one of its own extras) cannot be asked to describe itself until it is installed. Gating a whole section on a requirement is the host's declaration, not part of this contract.
 
-## What module-setup provides
+## What app-setup provides
 
-`src/module_setup/contract.py`:
+`src/app_setup/contract.py`:
 
 - **`SetupContract`** — the `Protocol` above.
 - **`parse_description(data) -> Description`** — turns a `config_schema()` result into typed, frozen objects the form is drawn from, and raises `ContractError` (a `ValueError`) naming the path of anything outside this spec: an unknown contract version, an unsupported keyword, a `oneOf` without a discriminator, a field without a `description`.
-- **`check_contract(contract, examples)`** — the conformance check a library runs in its own test suite (module-setup is a dev dependency there, never a runtime one). Given the contract and a list of example configs, it asserts:
+- **`check_contract(contract, examples)`** — the conformance check a library runs in its own test suite (app-setup is a dev dependency there, never a runtime one). Given the contract and a list of example configs, it asserts:
   - the contract object has the seven callables;
   - `config_schema()` parses, and returns the same value twice;
   - every example passes `check_config`;

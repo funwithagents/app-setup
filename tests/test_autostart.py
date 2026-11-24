@@ -6,10 +6,10 @@ from typing import Any
 import pytest
 from fakes import SpeechLib
 
-from module_setup.app import App, AppModel, Section
-from module_setup.autostart import add_start_arguments, starts_at_launch
-from module_setup.folder import ConfigFolder
-from module_setup.secrets import SecretStore
+from app_setup.app import App, AppModel, Section
+from app_setup.autostart import add_start_arguments, starts_at_launch
+from app_setup.folder import ConfigFolder
+from app_setup.secrets import SecretStore
 
 DEFAULTS = {"speech": {"module": {"type": "local-voice"}}}
 

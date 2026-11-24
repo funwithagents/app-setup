@@ -1,5 +1,5 @@
 [project]
-name = "module-setup"
+name = "app-setup"
 version = "0.1.0"
 description = "The Setup side of a module-based app: choose a module, edit its config from its schema, install its extra, prepare what it needs, manage its keys."
 readme = "README.md"
@@ -31,7 +31,7 @@ browser = [
 ]
 dev = [
     # The ui extra, so the page is type-checked and tested in the dev loop.
-    "module-setup[ui]",
+    "app-setup[ui]",
     "pyright>=1.1.414",
     "pytest>=9.2.0",
     "ruff>=0.17.6",
@@ -39,7 +39,7 @@ dev = [
 
 [tool.uv.sources]
 # Self-reference for the dev group above, which pulls the package's own extra.
-module-setup = { workspace = true }
+app-setup = { workspace = true }
 
 [tool.ruff]
 target-version = "py311"  # keep in sync with requires-python

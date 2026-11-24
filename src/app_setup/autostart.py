@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import argparse
 
-from module_setup.app import AppModel
+from app_setup.app import AppModel
 
 __all__ = ["add_start_arguments", "starts_at_launch"]
 

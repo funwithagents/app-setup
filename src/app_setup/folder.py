@@ -4,7 +4,7 @@ An app runs from a folder, not from a config file. The folder holds ``config.jso
 config the Setup panel saves and the app runs with: one document per section) and ``.env``
 (the secrets, [secrets.py](secrets.py)). The app's default config is not in the folder: it
 is the starting point written there the first time, and what "Reset" goes back to. An app
-may keep its own files in the folder too; module-setup leaves them alone.
+may keep its own files in the folder too; app-setup leaves them alone.
 """
 
 from __future__ import annotations

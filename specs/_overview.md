@@ -1,12 +1,12 @@
 # Overview
 
-What module-setup is, the words it uses, and how its specs fit together. Read this first; the normative detail is in the specs listed in [_index.md](_index.md).
+What app-setup is, the words it uses, and how its specs fit together. Read this first; the normative detail is in the specs listed in [_index.md](_index.md).
 
 ## What it is
 
 Some libraries are configured by a JSON document that selects **modules**: interchangeable implementations of one job, such as the providers of a speech synthesizer, the recognizers of a speech-to-text engine, or the backends of a robot driver. Each module may need an optional dependency (an **extra**) and things on the machine (model weights, a binary). Without help, a user finds this out by editing JSON by hand and reading error messages.
 
-module-setup is the shared code that turns it into a page. Every app built on such libraries — a library's own demo, or an application composing several of them — gets the same two panels, and places them in its own page:
+app-setup is the shared code that turns it into a page. Every app built on such libraries — a library's own demo, or an application composing several of them — gets the same two panels, and places them in its own page:
 
 - **Setup**: choose modules, edit their config in a form, see which extras are missing and install them, prepare what each module needs.
 - **Secrets**: the keys the config names, where each comes from, and saving one.
@@ -18,7 +18,7 @@ The rest of the page is the app's: above all its session, starting the runtime w
 | Word | Meaning |
 |---|---|
 | **app** | The process and its page. It stays up from launch to exit. |
-| **session** | One run of the app's runtime, from Start to Stop, run by the app itself. The config cannot change during a session (the app tells module-setup when one runs); it can between two sessions, without restarting the app. |
+| **session** | One run of the app's runtime, from Start to Stop, run by the app itself. The config cannot change during a session (the app tells app-setup when one runs); it can between two sessions, without restarting the app. |
 | **host** | The project the app belongs to: the one whose `pyproject.toml` and `uv.lock` the environment is installed from: the library itself for its own demo, the application for an app composing several libraries. |
 | **library** | A package that owns a config document and implements the contract. |
 | **module** | One selectable implementation inside a library's config (one voice provider among several, one recognizer among several). |
@@ -28,9 +28,9 @@ The rest of the page is the app's: above all its session, starting the runtime w
 
 ## Who does what
 
-- **A library declares.** It implements the contract ([module-contract.md](module-contract.md)): it describes its config as a schema, says which extras a config needs, checks the config itself, checks what this machine is missing for it (extras, keys, files), downloads what it can, and runs it once on request. It imports nothing from module-setup and returns plain data.
-- **module-setup acts.** It renders the form from the schema, tells from package metadata whether an extra can be installed on this platform, maps it to the host's own extra and installs it with uv, stores secrets, keeps the config folder, and says why a config cannot run yet.
-- **The host composes.** It lists its sections, hands each library's contract to module-setup, places the two panels in its page, and runs its sessions from the saved config, telling module-setup when one is running.
+- **A library declares.** It implements the contract ([module-contract.md](module-contract.md)): it describes its config as a schema, says which extras a config needs, checks the config itself, checks what this machine is missing for it (extras, keys, files), downloads what it can, and runs it once on request. It imports nothing from app-setup and returns plain data.
+- **app-setup acts.** It renders the form from the schema, tells from package metadata whether an extra can be installed on this platform, maps it to the host's own extra and installs it with uv, stores secrets, keeps the config folder, and says why a config cannot run yet.
+- **The host composes.** It lists its sections, hands each library's contract to app-setup, places the two panels in its page, and runs its sessions from the saved config, telling app-setup when one is running.
 
 ## The Setup sequence
 

@@ -3,12 +3,12 @@ from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _AGENTS_MD = _REPO_ROOT / "AGENTS.md"
-_PKG = _REPO_ROOT / "src" / "module_setup"
+_PKG = _REPO_ROOT / "src" / "app_setup"
 _SPECS_DIR = _REPO_ROOT / "specs"
 
-# Matches link targets like `src/module_setup/foo.py` or `src/module_setup/ui/foo.py`
+# Matches link targets like `src/app_setup/foo.py` or `src/app_setup/ui/foo.py`
 # anywhere in AGENTS.md.
-_MODULE_LINK = re.compile(r"src/module_setup/((?:[a-z_]+/)*[A-Za-z_][A-Za-z0-9_]*\.py)")
+_MODULE_LINK = re.compile(r"src/app_setup/((?:[a-z_]+/)*[A-Za-z_][A-Za-z0-9_]*\.py)")
 
 
 def _mapped_modules() -> set[str]:
@@ -49,7 +49,7 @@ def test_agents_md_maps_exactly_the_package_modules():
 #
 #     ---
 #     code:
-#       - src/module_setup/example.py
+#       - src/app_setup/example.py
 #     tests:
 #       - tests/test_example.py
 #     ---
@@ -146,8 +146,8 @@ def test_every_concept_module_is_governed_by_a_spec():
     governed: set[str] = set()
     for spec in _spec_files():
         for rel in _parse_frontmatter(spec).get("code", []):
-            if rel.startswith("src/module_setup/"):
-                governed.add(rel.removeprefix("src/module_setup/"))
+            if rel.startswith("src/app_setup/"):
+                governed.add(rel.removeprefix("src/app_setup/"))
 
     ungoverned = _concept_modules() - governed
     assert not ungoverned, (

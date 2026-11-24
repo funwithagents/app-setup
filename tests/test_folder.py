@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from module_setup.folder import ConfigFolder, FolderError, default_folder
+from app_setup.folder import ConfigFolder, FolderError, default_folder
 
 DEFAULTS = {"tts": {"module": {"type": "tone"}}}
 

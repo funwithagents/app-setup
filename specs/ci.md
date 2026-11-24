@@ -40,7 +40,7 @@ None waits on another, and one platform's failure leaves the others running (`fa
 
 ### A browser test cannot pass by not running
 
-Locally, the browser tests skip without Playwright or Chromium, like the rest of the opt-in tier. In CI, `MODULE_SETUP_E2E_REQUIRE_BROWSER=1` turns that skip into a failure (`tests-e2e/support.no_browser`), so a broken browser install shows as red, never as a green run that tested nothing.
+Locally, the browser tests skip without Playwright or Chromium, like the rest of the opt-in tier. In CI, `APP_SETUP_E2E_REQUIRE_BROWSER=1` turns that skip into a failure (`tests-e2e/support.no_browser`), so a broken browser install shows as red, never as a green run that tested nothing.
 
 ### No secret
 

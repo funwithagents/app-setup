@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from module_setup.extras import (
+from app_setup.extras import (
     Installer,
     find_installer,
     host_extras,

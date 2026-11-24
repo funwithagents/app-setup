@@ -7,8 +7,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-from module_setup.app import Problem, SetupItem
-from module_setup.secrets import SecretVariable
+from app_setup.app import Problem, SetupItem
+from app_setup.secrets import SecretVariable
 
 __all__ = [
     "config_report",

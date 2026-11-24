@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from module_setup.secrets import SecretStore, SecretVariable, format_env, parse_env
+from app_setup.secrets import SecretStore, SecretVariable, format_env, parse_env
 
 
 def test_a_dot_env_is_read_as_its_usual_dialect() -> None:

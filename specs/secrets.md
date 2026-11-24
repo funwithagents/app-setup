@@ -1,6 +1,6 @@
 ---
 code:
-  - src/module_setup/secrets.py
+  - src/app_setup/secrets.py
 tests:
   - tests/test_secrets.py
 ---
@@ -50,7 +50,7 @@ class SecretStore:
 
 `set` refuses a name that is not a variable name and an empty value (`ValueError`); setting a variable the shell already sets writes the file and returns `shell`, so the page can say the file's value is not the one in use. `SecretVariable.in_file` says the file sets a variable too; `shadowed` is that, with the shell's value in use. `file_names` lists what the `.env` sets, so the page can show the variables no config names (a stale key to remove). No method returns a value.
 
-Which variables a config names is read from the sections' schemas (`module_setup.form.secret_variables`, used by `AppModel.secret_variables`): each `x-secret-env` field's value, or its default when absent; an object holding a key itself names none.
+Which variables a config names is read from the sections' schemas (`app_setup.form.secret_variables`, used by `AppModel.secret_variables`): each `x-secret-env` field's value, or its default when absent; an object holding a key itself names none.
 
 ## Testing
 

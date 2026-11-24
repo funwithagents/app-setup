@@ -3,7 +3,7 @@ from typing import Any
 
 import pytest
 
-from module_setup.contract import (
+from app_setup.contract import (
     ContractError,
     ContractViolation,
     FieldSpec,

@@ -1,6 +1,6 @@
 # Implementation plans
 
-Implementation plans for module-setup — each plan turns a settled part of a spec (see [specs/_index.md](../specs/_index.md)) into concrete, buildable steps. Plans are ordered by their date-time filename prefix (`YYYYMMDDHHmm_`).
+Implementation plans for app-setup — each plan turns a settled part of a spec (see [specs/_index.md](../specs/_index.md)) into concrete, buildable steps. Plans are ordered by their date-time filename prefix (`YYYYMMDDHHmm_`).
 
 ## Plans
 
@@ -18,7 +18,8 @@ Implementation plans for module-setup — each plan turns a settled part of a sp
 | [202611241155_ci.md](202611241155_ci.md) | Continuous integration ([specs/ci.md](../specs/ci.md)): lint, format and types, the fast tier on three platforms, the browser tests with a locked Playwright | Done |
 | [202611241233_autostart.md](202611241233_autostart.md) | Autostart ([specs/autostart.md](../specs/autostart.md)): `App(autostart=...)`, the choice in `launch.json` apart from the config, the Setup panel's checkbox, `--start` / `--no-start`, `starts_at_launch` | Done |
 | [202611241337_form-defaults.md](202611241337_form-defaults.md) | The form's one rule for defaults ([specs/ui.md](../specs/ui.md)): a field not set shows its default greyed, numbers included (drawn as text boxes); a value in white is set and saved | Done |
-| [202611241406_base-dir.md](202611241406_base-dir.md) | Relative paths ([specs/module-contract.md](../specs/module-contract.md)): `check_setup`, `prepare`, `options`, `probe` take `base_dir`, module-setup passes the app's folder, `check_contract` checks it | Done |
+| [202611241406_base-dir.md](202611241406_base-dir.md) | Relative paths ([specs/module-contract.md](../specs/module-contract.md)): `check_setup`, `prepare`, `options`, `probe` take `base_dir`, app-setup passes the app's folder, `check_contract` checks it | Done |
+| [202611241726_rename-app-setup.md](202611241726_rename-app-setup.md) | The rename ([specs/project.md](../specs/project.md) "Name"): `module-setup` / `module_setup` become `app-setup` / `app_setup`, the repository `funwithagents/app-setup`; no change in behaviour | Done |
 | _(add plans here — see [_plan-template.md](_plan-template.md))_ | | |
 
 ## Status legend
