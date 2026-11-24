@@ -7,7 +7,7 @@ tests:
 
 # Secrets
 
-**Status:** Implemented
+**Status:** Updated
 
 ## Purpose
 
@@ -46,15 +46,18 @@ class SecretStore:
     def file_names(self) -> list[str]: ...                   # what the .env sets, names only
     def set(self, name: str, value: str) -> Source: ...     # the source it now has
     def remove(self, name: str) -> Source: ...
+    revision: int                                            # bumped by each set and remove
 ```
 
 `set` refuses a name that is not a variable name and an empty value (`ValueError`); setting a variable the shell already sets writes the file and returns `shell`, so the page can say the file's value is not the one in use. `SecretVariable.in_file` says the file sets a variable too; `shadowed` is that, with the shell's value in use. `file_names` lists what the `.env` sets, so the page can show the variables no config names (a stale key to remove). No method returns a value.
+
+`revision` counts the writes: each `set` and `remove` bumps it, by any caller. A page that cannot be told of a write (the Setup panel, when a key is saved from the Secrets panel or another browser tab) compares it with the last one it saw, and checks the config again when it changed: a key just saved turns its item ready without a click on Check ([ui.md](ui.md)).
 
 Which variables a config names is read from the sections' schemas (`app_setup.form.secret_variables`, used by `AppModel.secret_variables`): each `x-secret-env` field's value, or its default when absent; an object holding a key itself names none.
 
 ## Testing
 
-`tests/test_secrets.py`: the dialect; a written value reads back the same, whatever its characters; the file feeds the environment but not over the shell, and a variable set in both is reported as shadowed; the file's names; set and remove keep the other lines and the permissions; bad names and empty values are refused.
+`tests/test_secrets.py`: the dialect; a written value reads back the same, whatever its characters; the file feeds the environment but not over the shell, and a variable set in both is reported as shadowed; the file's names; set and remove keep the other lines and the permissions, and each bumps `revision`; bad names and empty values are refused.
 
 ## Open questions
 

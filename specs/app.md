@@ -8,7 +8,7 @@ tests:
 
 # App
 
-**Status:** Implemented
+**Status:** Updated
 
 ## Purpose
 
@@ -67,6 +67,7 @@ model = AppModel(APP, ConfigFolder(default_folder(APP.name), APP.default_config)
 |---|---|
 | `used(config, sections=None)` | The sections the config uses, in declaration order (only those of `sections`, when given) |
 | `saved_config()`, `save(config)`, `reset()` | Read, save, or reset to the default the config in the folder. `save` and `reset` raise `RuntimeError` while the config is locked |
+| `unsaved(draft)` | Whether a draft differs from the saved config: the whole config compared, not only the sections it uses (Save writes the whole draft, a section not used keeps its document, and `when` reads keys outside the sections) |
 | `locked()` | Whether the app is using the saved config |
 | `path` | The folder: where a section's relative paths resolve |
 | `check_config(config, sections=None)` | Every section's `check_config`, each problem as `Problem(section, path, message)`, the path a JSON Pointer into the app's config (`/speech/module/voice_id`). A used section absent from the config is a problem at `/<section>` |
@@ -101,7 +102,8 @@ The app's own Start uses the model this way: read `saved_config()`, refuse with 
 - the secrets named and their sources;
 - building the model writes the default config and loads the `.env` under the shell's variables;
 - the blockers of a config, then none once ready;
-- the config refused while the app locks it, and never locked without a lock.
+- the config refused while the app locks it, and never locked without a lock;
+- a draft unsaved until it is saved, a change to a section not used included.
 
 ## Open questions
 

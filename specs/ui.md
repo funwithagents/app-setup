@@ -13,7 +13,7 @@ tests:
 
 # UI
 
-**Status:** Implemented
+**Status:** Updated
 
 ## Purpose
 
@@ -26,22 +26,28 @@ import gradio as gr
 
 from app_setup.app import AppModel
 from app_setup.folder import ConfigFolder, default_folder
-from app_setup.ui import secrets_panel, setup_panel
+from app_setup.ui import secrets_panel, setup_panel, unsaved_notice
 
 model = AppModel(APP, ConfigFolder(default_folder(APP.name), APP.default_config), locked=session.running)
 
 with gr.Blocks() as page:
     with gr.Tab("Session"):
+        notice = gr.Markdown()                # "The Setup tab has unsaved changes: …"
         ...                                   # the app's own: Start, Stop, its controls
     with gr.Tab("Setup"):
         setup = setup_panel(model)
     with gr.Tab("Secrets"):
         secrets_panel(model, setup.draft)
 
+    setup.draft.change(lambda draft: unsaved_notice(model, draft), inputs=[setup.draft], outputs=[notice])
+    setup.saved.change(lambda draft: unsaved_notice(model, draft), inputs=[setup.draft], outputs=[notice])
+
 page.launch()
 ```
 
 Each panel is a function drawing its components where it is called, inside the app's `gr.Blocks`. It brings its own state, its own events and its own page-load step (a `gr.on` with no trigger), so either can be used alone, and nothing has to be wired between them except what the app chooses.
+
+**`unsaved_notice(model, draft) -> str`** is for the app's own session view: "The Setup tab has unsaved changes: Start uses the saved config." while the draft differs from the saved config (`AppModel.unsaved`), else "" (an empty draft, the panel not loaded yet, included). Given `setup.draft` as input, on its `change` and the panel's `saved.change`, it tells a user about to press Start that the edits they see are not what will run.
 
 Serving the page, the command line, when to start a session (a setting of the app's to start one at launch, for instance) and stopping it at exit are the app's.
 
@@ -49,9 +55,13 @@ Serving the page, the command line, when to start a session (a setting of the ap
 
 **`setup_panel(model) -> SetupPanel`**
 
-- For an app with autostart, **first** a **"Start the session when the app launches"** checkbox, loaded from the folder's `launch.json` and saved at once, enabled while a session runs ([autostart.md](autostart.md)), then a **Configuration** title over the buttons below: the launch choice is not part of the config, and Save, Revert and Reset do not touch it.
-- **Save**, **Revert to saved**, **Reset to defaults**. Save and Reset are disabled, with a line saying a session is running, while the model is locked (`AppModel.locked`, polled every second).
-- A line saying that a field marked `*` must be filled in (the schema's `required`) and the others have a default or can stay empty, and that a value in grey is a default: not set, not saved.
+**Draft and saved.** The form edits a draft of the config, one per browser tab. Every action of a section — Check, Install missing extras, Prepare, Prepare all, Test — acts on the draft, saved or not; a session (the app's Start) uses the saved config only. The secrets (the Secrets panel) and the launch choice (the checkbox below) are saved at once. The panel says so, and says whenever the draft differs from the saved config, so a user never tests an edit, sees it work, and starts the old config.
+
+From top to bottom:
+
+- For an app with autostart, **first** a **"Start the session when the app launches"** checkbox, loaded from the folder's `launch.json` and saved at once, enabled while a session runs ([autostart.md](autostart.md)): the launch choice is not part of the config, and Save, Revert and Reset do not touch it.
+- A **Configuration** title, always, with the line "Check, Install, Prepare and Test try the config as it is in the form. Save it for a session to use it.", then a line saying that a field marked `*` must be filled in (the schema's `required`) and the others have a default or can stay empty, and that a value in grey is a default: not set, not saved.
+- **"Unsaved changes — Save is at the bottom."** while this tab's draft differs from the saved config (`AppModel.unsaved`), else nothing.
 - **One block per section**, in the app's order, shown while the config uses it (`when`): its title (the app's `Section(title=…)`, else its library's, never its key), its form, then **its own checks**, acting on that section alone: **Check** shows its problems and **one row per item** of what the machine needs for it (below); **Install missing extras** installs the host extras that carry what it misses, streaming uv's output; **Prepare all** prepares every item not ready yet, all at the same time, each in its own row; **Test** runs its `probe`. The output box appears with the first action that writes to it (Check's problems, Install, Test). All four act on the form's current values, saved or not. While Check, Install or Test runs, the section's other buttons are disabled, rows included; preparations run alongside each other (below).
 - **An item's row**: its title, its state in plain words, its detail, and what can be done about it:
   - *Ready.*
@@ -59,7 +69,12 @@ Serving the page, the command line, when to start a session (a setting of the ap
   - *Not prepared yet* (not required): "The first start will prepare it itself and be slower"; a **Prepare** button.
   - *Unknown*: the detail.
   - While it is prepared: a progress bar with its share done and the library's message, which says what is happening ("Downloading 120 of 300 MB", "Building the plugin cache"), or, when the library cannot measure, the message and the time elapsed; then *Ready*, or the failure's message on that row, with **Prepare** offered again. A failed row does not stop the others: each row is its own preparation. While a row is being prepared, its own **Prepare** is disabled; the section's other rows stay available, so a second item can be started while the first runs. A section is one library's contract, so what it needs is installed, downloaded and tested with it; Save, Revert and Reset stay for the whole config, one file and one draft, since sections can depend on each other (`when`).
-- The checks also run by themselves, for each section, each time the form's structure changes (the page loaded, a module switched, an optional object turned on or off, a choice from a list, revert, reset), and each section's output is cleared then: what was shown was about another config. A value typed does not run them; **Check** does.
+- At the bottom, for the whole config: **"Unsaved changes."** while the draft differs from the saved config, then **Save**, **Revert to saved**, **Reset to defaults**, then the line saying a session is running and the line saying what the last button did. Save and Reset are disabled, with that line, while the model is locked (`AppModel.locked`, polled every second). The config is saved last, after the sections it is tried in, so the buttons that try it come before the one that keeps it.
+- **The unsaved lines** are compared again (draft against the saved file, which is cheap) on each change of the draft, value edits included (the form writes a value on `input`), after Save, Revert and Reset, and every second (another tab may have saved).
+- **The checks run again by themselves** — the section's problems, its summary and its item rows, as if **Check** were clicked:
+  - for each section, each time the form's structure changes (the page loaded, a module switched, an optional object turned on or off, a choice from a list, revert, reset), and each section's output is cleared then: what was shown was about another config;
+  - for one section, when the user finishes editing one of its fields: a text box left (`blur`) or Enter pressed in it (`submit`), a JSON box left, a checkbox ticked, a choice made in a list of values. Not on each keystroke: a check may import a provider;
+  - for every section the config uses, in every browser tab, when a key was saved or removed (`SecretStore.revision` changed, [secrets.md](secrets.md)), the Secrets panel's or any other write: the panel's one-second timer notices the change (each tab keeps the last revision it saw) and checks again then, and only then.
 
 It returns what the app can listen to:
 
@@ -94,7 +109,7 @@ Every browser tab has its own draft of the config; the saved config and the secr
 - **Switching module** (`select_branch`) keeps the fields common to every module and drops the old module's own, even those the new module has under the same name (a voice id of one provider means nothing to another).
 - **A named list** (`x-options` on a module or a field) gets a button that loads `options` and a dropdown whose choice writes its fields.
 
-A change of structure (a module switched, an optional object turned on or off, a choice from a list, revert, reset) draws the form again; a value edit does not, so typing never loses focus. Choosing the module already selected, or switching an object to the state it is in, draws nothing. The module dropdown listens to `select`, which fires once per choice (`input` fires twice, and each redraw replaces the fields). A text or number field writes on `input` and again on `blur`, so a value typed right after a redraw, before the field's listeners are attached, still reaches the config. Every form component is explicitly interactive: gradio does not infer it for components drawn inside `gr.render`. Each section's problems are not drawn on the fields: **Check** lists them with their pointers.
+A change of structure (a module switched, an optional object turned on or off, a choice from a list, revert, reset) draws the form again; a value edit does not, so typing never loses focus. A field finished (left, Enter, a box ticked, a value chosen) also bumps its section's `edited` state, which runs that section's checks again. Choosing the module already selected, or switching an object to the state it is in, draws nothing. The module dropdown listens to `select`, which fires once per choice (`input` fires twice, and each redraw replaces the fields). A text or number field writes on `input` and again on `blur`, so a value typed right after a redraw, before the field's listeners are attached, still reaches the config. Every form component is explicitly interactive: gradio does not infer it for components drawn inside `gr.render`. Each section's problems are not drawn on the fields: **Check** lists them with their pointers.
 
 ## Reports
 
@@ -103,15 +118,15 @@ A change of structure (a module switched, an optional object turned on or off, a
 ## Testing
 
 - `tests/test_form.py`: the tree for each kind of item; every coercion and every refusal; writing, creating and removing; switching module; optional objects; the variables a config names.
-- `tests/ui/test_panels.py`: the form drawn into a real gradio page (the selected module's fields, the hidden key, the list button, a section without its library); both panels drawn in an app's own tabs, next to its own components; Save and Reset disabled while the app locks the config; a section's item rows, with a Prepare button on each preparable item not ready; the Secrets panel reading the config it follows, else the saved one.
+- `tests/ui/test_panels.py`: the form drawn into a real gradio page (the selected module's fields, the hidden key, the list button, a section without its library); both panels drawn in an app's own tabs, next to its own components; the panel's order (the Configuration line, the sections, then Save at the bottom); Save and Reset disabled while the app locks the config; the unsaved lines for a draft equal to the saved config and one differing, and `unsaved_notice`; a field left re-running its section's checks; the timer re-running the checks after a key was saved, and not otherwise; a section's item rows, with a Prepare button on each preparable item not ready; the Secrets panel reading the config it follows, else the saved one.
 - `tests/ui/test_report.py`: the wording of every report.
 
-Behaviour in a browser is not covered by the fast tier: gradio's client cannot drive the per-browser draft. `tests-e2e/test_panels_in_browser.py` drives the panels in headless Chromium (Playwright, skipped when absent), inside an app's page where they are not the first tab: switch module, type a required field, save; switch back, pick a voice from the list, save; the saved file is checked each time. Then one item is prepared from its row, its progress shown on that row, and it turns ready while the other stays not prepared. Then the Secrets panel lists the key the unsaved draft names, and Save is disabled while the app's session runs and enabled once it stops. It found that the form's fields were not interactive, and that a value typed right after a module switch was lost.
+Behaviour in a browser is not covered by the fast tier: gradio's client cannot drive the per-browser draft. `tests-e2e/test_panels_in_browser.py` drives the panels in headless Chromium (Playwright, skipped when absent), inside an app's page where they are not the first tab: switch module, type a required field, save; switch back, pick a voice from the list, save; the saved file is checked each time. Then one item is prepared from its row, its progress shown on that row, and it turns ready while the other stays not prepared. Then the Secrets panel lists the key the unsaved draft names, and Save is disabled while the app's session runs and enabled once it stops. A value typed shows "Unsaved changes", which Save takes away; a key saved in the Secrets panel turns its row ready on the Setup panel without a click on Check. It found that the form's fields were not interactive, and that a value typed right after a module switch was lost.
 
 ## Open questions
 
 1. **Problems on the fields themselves**, rather than in the Check report.
 2. **Lists of objects as rows** rather than JSON text.
-3. **Checking as one types**: today checks run on request, since `check_setup` imports providers.
+3. **Checking as one types**: checks run when a field is finished, not on each keystroke, since `check_setup` imports providers.
 4. **The button's verb is generic** (**Prepare**): what it does — a download, a cache built — is said by the library's progress message. A verb of the item's own is deferred until a row needs one.
 5. **The panels' events are also gradio API endpoints**, saving a key included. Where the page listens is the app's choice: on another address than `127.0.0.1`, they are exposed to that network. Hiding them, or adding authentication, is deferred.
