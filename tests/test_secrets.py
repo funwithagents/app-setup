@@ -51,11 +51,15 @@ def test_the_file_feeds_the_environment_but_never_overrides_the_shell(
     assert store.variables(
         ["IN_SHELL", "FROM_FILE", "NOWHERE", "EMPTY_IN_SHELL", "FROM_FILE"]
     ) == [
-        SecretVariable("IN_SHELL", "shell"),
-        SecretVariable("FROM_FILE", "file"),
+        SecretVariable("IN_SHELL", "shell", in_file=True),
+        SecretVariable("FROM_FILE", "file", in_file=True),
         SecretVariable("NOWHERE", "missing"),
         SecretVariable("EMPTY_IN_SHELL", "missing"),
     ]
+    # The shell's value is used; the file's is there but unused.
+    [in_shell, from_file] = store.variables(["IN_SHELL", "FROM_FILE"])
+    assert (in_shell.shadowed, from_file.shadowed) == (True, False)
+    assert store.file_names() == ["FROM_FILE", "IN_SHELL"]
 
 
 def test_setting_a_variable_writes_the_file_privately_and_loads_it(

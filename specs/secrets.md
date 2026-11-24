@@ -23,6 +23,8 @@ Libraries read their keys from the environment, through variable names their con
 
 `SecretStore(env_path, environ=os.environ)` records, when it is created, which variables the shell set. `load()` then copies the file's variables into the environment, except the shell's, and takes out those an earlier load put there that the file no longer holds. The `AppModel` loads it when it is built ([app.md](app.md)), and the store keeps the environment in step with each change, before any check or session, so the libraries' own `check_setup` and the Secrets panel see the same environment. A library never reads the `.env` itself.
 
+**Why the shell wins.** It is the dotenv convention (python-dotenv's `load_dotenv` without `override`, Node's and Ruby's dotenv, Docker Compose's variable substitution): the `.env` holds the folder's defaults, the environment a process is started with is the deliberate, per-run choice, so a deployment (a service definition, a CI job, a variable on the command line) overrides the file without editing it, and a stale key in the folder never silently beats it. The cost, a key saved from the Secrets panel that is not the one used, is made visible instead: a variable the shell sets and the file also sets is reported as such (`SecretVariable.in_file`, `shadowed`), with how to use the file's value.
+
 ## The `.env` file
 
 The usual dialect: `NAME=value` lines, an optional `export`, values plain (a ` #` starts a comment), `'single'` or `"double"` quoted (`\n`, `\"`, `\\` escapes in double quotes), blank lines and `#` comments skipped, a later line winning.
@@ -40,18 +42,19 @@ def format_env(name: str, value: str) -> str: ...
 class SecretStore:
     def load(self) -> None: ...
     def source(self, name: str) -> Literal["shell", "file", "missing"]: ...
-    def variables(self, names: Iterable[str]) -> list[SecretVariable]: ...
+    def variables(self, names: Iterable[str]) -> list[SecretVariable]: ...  # name, source, in_file
+    def file_names(self) -> list[str]: ...                   # what the .env sets, names only
     def set(self, name: str, value: str) -> Source: ...     # the source it now has
     def remove(self, name: str) -> Source: ...
 ```
 
-`set` refuses a name that is not a variable name and an empty value (`ValueError`); setting a variable the shell already sets writes the file and returns `shell`, so the page can say the file's value is not the one in use. No method returns a value.
+`set` refuses a name that is not a variable name and an empty value (`ValueError`); setting a variable the shell already sets writes the file and returns `shell`, so the page can say the file's value is not the one in use. `SecretVariable.in_file` says the file sets a variable too; `shadowed` is that, with the shell's value in use. `file_names` lists what the `.env` sets, so the page can show the variables no config names (a stale key to remove). No method returns a value.
 
 Which variables a config names is read from the sections' schemas (`module_setup.form.secret_variables`, used by `AppModel.secret_variables`): each `x-secret-env` field's value, or its default when absent; an object holding a key itself names none.
 
 ## Testing
 
-`tests/test_secrets.py`: the dialect; a written value reads back the same, whatever its characters; the file feeds the environment but not over the shell; set and remove keep the other lines and the permissions; bad names and empty values are refused.
+`tests/test_secrets.py`: the dialect; a written value reads back the same, whatever its characters; the file feeds the environment but not over the shell, and a variable set in both is reported as shadowed; the file's names; set and remove keep the other lines and the permissions; bad names and empty values are refused.
 
 ## Open questions
 

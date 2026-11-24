@@ -324,13 +324,13 @@ def _branch_names(choice: Choice, value: Any) -> set[str]:
 def select_branch(
     document: Mapping[str, Any], path: Path, choice: Choice, value: Any
 ) -> dict[str, Any]:
-    """*document* with the module at *path* switched to *value*: the fields the old module
-    had and the new one lacks are dropped; fields the two share by name, and the fields
-    common to every module, are kept."""
+    """*document* with the module at *path* switched to *value*: the old module's own fields
+    are dropped, even those the new one has under the same name (a voice id of one provider
+    means nothing to another); the fields common to every module are kept."""
     node = get_at(document, path)
     current = dict(node) if isinstance(node, Mapping) else {}
     previous = current.get(choice.discriminator)
-    dropped = _branch_names(choice, previous) - _branch_names(choice, value)
+    dropped = _branch_names(choice, previous)
     updated = {k: v for k, v in current.items() if k not in dropped}
     updated[choice.discriminator] = value
     if not path:

@@ -126,6 +126,28 @@ class _Loaded:
         return self.contract
 
 
+def _extra_item(requirement: str) -> dict[str, Any]:
+    """A `check_setup` item for *requirement*, from the installed packages' metadata alone:
+    for a section whose config the library cannot be asked about yet."""
+    state = requirement_status(requirement)
+    if state.state == "installed":
+        return {
+            "id": f"extra:{requirement}",
+            "title": requirement,
+            "status": "ready",
+            "detail": "Installed.",
+            "preparable": False,
+        }
+    return {
+        "id": f"extra:{requirement}",
+        "title": requirement,
+        # "unavailable" is told apart by `_item`, which reads the same metadata.
+        "status": "missing" if state.state in ("missing", "unavailable") else "unknown",
+        "detail": state.detail,
+        "preparable": False,
+    }
+
+
 class AppModel:
     """The app's state and actions, shared by every browser tab on the page.
 
@@ -177,12 +199,17 @@ class AppModel:
         loaded.load()
         return loaded.error
 
-    def used(self, config: Mapping[str, Any]) -> list[str]:
-        """The sections this config uses, in declaration order."""
+    def used(
+        self, config: Mapping[str, Any], sections: Iterable[str] | None = None
+    ) -> list[str]:
+        """The sections this config uses, in declaration order; only those of
+        *sections* when given (the Setup panel acts on one section at a time)."""
+        wanted = None if sections is None else set(sections)
         return [
             section.name
             for section in self.app.sections
-            if section.when is None or section.when(config)
+            if (section.when is None or section.when(config))
+            and (wanted is None or section.name in wanted)
         ]
 
     @property
@@ -219,10 +246,13 @@ class AppModel:
 
     # --- Checking.
 
-    def check_config(self, config: Mapping[str, Any]) -> list[Problem]:
-        """What is wrong in the config itself, for every section it uses."""
+    def check_config(
+        self, config: Mapping[str, Any], sections: Iterable[str] | None = None
+    ) -> list[Problem]:
+        """What is wrong in the config itself, for every section it uses (of
+        *sections*, when given)."""
         found: list[Problem] = []
-        for name in self.used(config):
+        for name in self.used(config, sections):
             contract = self.contract(name)
             if contract is None:
                 continue  # reported by check_setup, which can install it
@@ -242,12 +272,18 @@ class AppModel:
                 )
         return found
 
-    def check_setup(self, config: Mapping[str, Any]) -> list[SetupItem]:
+    def check_setup(
+        self, config: Mapping[str, Any], sections: Iterable[str] | None = None
+    ) -> list[SetupItem]:
         """What this machine is missing for every section the config uses: each section's
         `check_setup` items, an extra's item told which of the host's extras installs it. A
-        section whose document has problems is skipped: it is asked once it is right."""
+        section whose document has problems is not asked (the contract asks `check_setup`
+        only about a config `check_config` accepts): its extras are read instead from its
+        `required_extras`, which takes an incomplete config, and the installed packages'
+        metadata, so what it needs can be installed while the config is being fixed (a
+        voice list that needs the extra, for one). Only *sections*, when given."""
         found: list[SetupItem] = []
-        for name in self.used(config):
+        for name in self.used(config, sections):
             section = self.section(name)
             contract = self.contract(name)
             if contract is None:
@@ -267,11 +303,13 @@ class AppModel:
                 )
                 continue
             document = config.get(name)
-            if not isinstance(document, Mapping) or contract.check_config(
-                copy.deepcopy(dict(document))
-            ):
-                # The contract asks `check_setup` only about a config `check_config`
-                # accepts; the config's problems are reported by `check_config`.
+            if not isinstance(document, Mapping):
+                continue  # reported by check_config
+            if contract.check_config(copy.deepcopy(dict(document))):
+                for requirement in contract.required_extras(
+                    copy.deepcopy(dict(document))
+                ):
+                    found.append(self._item(name, _extra_item(requirement)))
                 continue
             for item in contract.check_setup(copy.deepcopy(dict(document))):
                 found.append(self._item(name, item))
@@ -302,13 +340,18 @@ class AppModel:
             host_extras=carriers,
         )
 
-    def blockers(self, config: Mapping[str, Any]) -> list[str]:
+    def blockers(
+        self, config: Mapping[str, Any], sections: Iterable[str] | None = None
+    ) -> list[str]:
         """Why *config* cannot run on this machine yet, in words; empty when it can: its
-        problems, then every missing item. An `unknown` item does not block."""
-        reasons = [f"{p.path}: {p.message}" for p in self.check_config(config)]
+        problems, then every missing item. An `unknown` item does not block. Only
+        *sections*, when given."""
+        reasons = [
+            f"{p.path}: {p.message}" for p in self.check_config(config, sections)
+        ]
         reasons += [
             f"{item.section}: {item.title} — {item.detail}"
-            for item in self.check_setup(config)
+            for item in self.check_setup(config, sections)
             if item.status == "missing"
         ]
         return reasons
@@ -332,12 +375,15 @@ class AppModel:
                 loaded.error = None  # retried at the next use
         return code
 
-    def missing_extras(self, config: Mapping[str, Any]) -> list[str]:
-        """The host extras that install what *config* is missing."""
+    def missing_extras(
+        self, config: Mapping[str, Any], sections: Iterable[str] | None = None
+    ) -> list[str]:
+        """The host extras that install what *config* is missing (for *sections*, when
+        given)."""
         return list(
             dict.fromkeys(
                 extra
-                for item in self.check_setup(config)
+                for item in self.check_setup(config, sections)
                 if item.installable
                 for extra in item.host_extras[:1]
             )
@@ -350,7 +396,7 @@ class AppModel:
         sections: Sequence[str] | None = None,
     ) -> None:
         """Prepare the sections that have something preparable missing."""
-        items = self.check_setup(config)
+        items = self.check_setup(config, sections)
         wanted = {
             item.section for item in items if item.preparable and item.status != "ready"
         }

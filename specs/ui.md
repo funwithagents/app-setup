@@ -50,8 +50,9 @@ Serving the page, the command line, when to start a session (a setting of the ap
 **`setup_panel(model) -> SetupPanel`**
 
 - **Save**, **Revert to saved**, **Reset to defaults**. Save and Reset are disabled, with a line saying a session is running, while the model is locked (`AppModel.locked`, polled every second).
-- **The form**: one group per section the config uses.
-- **Checks**: **Check** shows the config's problems and a table of what the machine is missing; **Install missing extras** installs the host extras that carry them, streaming uv's output; **Download missing files** runs `prepare`, streaming its progress; **Test** runs one section's `probe`. All four act on the form's current values, saved or not.
+- A line saying that a field marked `*` must be filled in (the schema's `required`) and the others have a default (shown in the field's hover text) or can stay empty.
+- **One block per section**, in the app's order, shown while the config uses it (`when`): its title (the app's `Section(title=…)`, else its library's, never its key), its form, then **its own checks**, acting on that section alone: **Check** shows its problems and a table of what the machine is missing for it; **Install missing extras** installs the host extras that carry what it misses, streaming uv's output; **Download missing files** runs its `prepare`, streaming its progress; **Test** runs its `probe`. The output box appears with the first action. All four act on the form's current values, saved or not. A section is one library's contract, so what it needs is installed, downloaded and tested with it; Save, Revert and Reset stay for the whole config, one file and one draft, since sections can depend on each other (`when`).
+- The checks also run by themselves, for each section, each time the form's structure changes (the page loaded, a module switched, an optional object turned on or off, a choice from a list, revert, reset), and each section's output is cleared then: what was shown was about another config. A value typed does not run them; **Check** does.
 
 It returns what the app can listen to:
 
@@ -60,7 +61,12 @@ It returns what the app can listen to:
 | `draft` | A `gr.State` holding the config being edited in this browser tab: an input for the app's own events |
 | `saved` | A `gr.State` that changes each time the panel saves or resets the config: `setup.saved.change(...)` follows the saved config |
 
-**`secrets_panel(model, config=None)`**: the variables the config names, each with its source; a name and a password field to write one to the folder's `.env`, or remove it. Values are never shown. Given a `gr.State` (a Setup panel's `draft`), it reads the variables from it and follows each change, so the key a newly chosen module needs appears at once; without one, it reads the saved config, on page load and on **Refresh**.
+**`secrets_panel(model, config=None)`**, in two parts, names only, values never shown:
+
+- **Keys the config uses**: the variables the config names, each with its source and the fields naming it; a variable the shell sets that the `.env` also sets reads "the shell (the folder's .env also sets it, unused)", with how to use the file's value. Under it, a name and a password field to save one to the folder's `.env`; saving a variable the shell sets says the shell's value is the one used.
+- **In the folder's .env**: every variable the file sets, always listed, each with what uses it (the fields of the current config naming it, or none; unused when the shell sets it too) and its own **Remove** button, so a stale key is removed in one click. **Refresh** reads the file again.
+
+Given a `gr.State` (a Setup panel's `draft`), the panel reads the variables from it and follows each change, so the key a newly chosen module needs appears at once; without one, it reads the saved config, on page load and on **Refresh**. The shell itself is not listed: it is read once, when the app starts, and holds much besides keys.
 
 Every browser tab has its own draft of the config; the saved config and the secrets are the model's, shared by all.
 
@@ -78,7 +84,7 @@ Every browser tab has its own draft of the config; the saved config and the secr
 - A key written in the config itself (`x-secret`) is never drawn.
 - A field's description is its help text; its default is shown, not written.
 - **What an edit writes** (`coerce`): an empty widget, or a value equal to the field's default, removes the key, so the config holds only what differs from the library's own defaults. A number with no fraction is written as an integer; a field accepting several kinds takes a number when the text is one and the field accepts it. An invalid value (bad JSON, a fraction for an integer) is refused with a message, and the config is unchanged.
-- **Switching module** (`select_branch`) keeps the fields common to every module and those the two modules share by name, and drops the old module's own.
+- **Switching module** (`select_branch`) keeps the fields common to every module and drops the old module's own, even those the new module has under the same name (a voice id of one provider means nothing to another).
 - **A named list** (`x-options` on a module or a field) gets a button that loads `options` and a dropdown whose choice writes its fields.
 
 A change of structure (a module switched, an optional object turned on or off, a choice from a list, revert, reset) draws the form again; a value edit does not, so typing never loses focus. Choosing the module already selected, or switching an object to the state it is in, draws nothing. The module dropdown listens to `select`, which fires once per choice (`input` fires twice, and each redraw replaces the fields). A text or number field writes on `input` and again on `blur`, so a value typed right after a redraw, before the field's listeners are attached, still reaches the config. Every form component is explicitly interactive: gradio does not infer it for components drawn inside `gr.render`. Each section's problems are not drawn on the fields: **Check** lists them with their pointers.

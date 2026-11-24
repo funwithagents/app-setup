@@ -31,7 +31,7 @@ from module_setup.form import (
     toggle_group,
 )
 
-__all__ = ["render_sections"]
+__all__ = ["render_section", "section_title"]
 
 Config = dict[str, Any]
 
@@ -294,32 +294,32 @@ def _advanced(item: FormItem) -> bool:
     return not isinstance(item, FormChoice) and item.advanced
 
 
-def render_sections(
-    model: AppModel, config: Config, draft: gr.State, revision: gr.State
+def section_title(model: AppModel, name: str) -> str:
+    """A section's title: the app's, else its library's, else its key."""
+    section = model.section(name)
+    description = model.description(name)
+    return section.title or (description.title if description else name)
+
+
+def render_section(
+    model: AppModel, name: str, config: Config, draft: gr.State, revision: gr.State
 ) -> None:
-    """Draw the form of every section *config* uses."""
-    for name in model.used(config):
-        section = model.section(name)
-        description = model.description(name)
-        title = section.title or (description.title if description else name)
-        with gr.Group():
-            gr.Markdown(f"### {title}")
-            if description is None:
-                gr.Markdown(
-                    "This section's library is not installed"
-                    + (
-                        f" (the `{section.host_extra}` extra)"
-                        if section.host_extra
-                        else ""
-                    )
-                    + ": install it below, then reload."
-                )
-                continue
-            document = get_at(config, (name,))
-            _group(
-                model,
-                name,
-                layout(description.schema, document if document is not ABSENT else {}),
-                draft,
-                revision,
-            )
+    """Draw the form of section *name* of *config*: its fields, from its library's
+    schema; or why it cannot be drawn yet (its library not installed)."""
+    section = model.section(name)
+    description = model.description(name)
+    if description is None:
+        gr.Markdown(
+            "This section's library is not installed"
+            + (f" (the `{section.host_extra}` extra)" if section.host_extra else "")
+            + ": **Install missing extras** below, then reload the page."
+        )
+        return
+    document = get_at(config, (name,))
+    _group(
+        model,
+        name,
+        layout(description.schema, document if document is not ABSENT else {}),
+        draft,
+        revision,
+    )
