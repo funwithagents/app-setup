@@ -1,10 +1,12 @@
 from app_setup.app import Problem, SetupItem
 from app_setup.secrets import SecretVariable
 from app_setup.ui.report import (
+    Progress,
     config_report,
     env_file_rows,
+    item_line,
     secrets_report,
-    setup_report,
+    setup_summary,
 )
 
 
@@ -16,46 +18,69 @@ def test_config_problems_are_listed_with_their_pointer() -> None:
     assert "`/speech/module/voice_id`: voice_id is required" in text
 
 
-def test_the_setup_table_says_what_to_do_about_each_missing_item() -> None:
-    items = [
-        SetupItem(
-            "speech",
-            "extra:speech-lib[x]",
-            "X extra",
-            "missing",
-            "Not installed.",
-            False,
-            ("speech-x",),
-        ),
-        SetupItem(
-            "speech", "weights:Ada", "Voice Ada", "missing", "Not downloaded.", True
-        ),
-        SetupItem("speech", "key:K", "K", "ready", "Set.", False),
-        SetupItem(
-            "speech",
-            "weights:Bo",
-            "Voice | Bo",
-            "unknown",
-            "Fetched at first load.",
-            True,
-        ),
-    ]
+EXTRA = SetupItem(
+    "speech",
+    "extra:speech-lib[x]",
+    "X extra",
+    "missing",
+    "Not installed.",
+    preparable=False,
+    required=True,
+    host_extras=("speech-x",),
+)
+VOICE = SetupItem(
+    "speech", "weights:Ada", "Voice Ada", "missing", "Not downloaded.", True, False
+)
+LEXICON = SetupItem("speech", "lexicon", "Lexicon", "missing", "Not built.", True, True)
+KEY = SetupItem("speech", "key:K", "K", "ready", "Set.", False, True)
 
-    text = setup_report(items)
 
-    assert text.startswith("❌ **2 thing(s) missing on this machine.**")
+def test_the_summary_tells_what_blocks_from_what_the_first_start_will_prepare() -> None:
     assert (
-        "| X extra | ❌ missing | Not installed. **Install missing extras** installs it "
-        "(`speech-x`). |" in text
+        setup_summary([]) == "✅ **This machine needs nothing more for this config.**"
+    )
+    assert setup_summary([KEY]) == "✅ **This machine is ready for this config.**"
+    assert setup_summary([EXTRA, VOICE, KEY]).startswith(
+        "❌ **1 thing(s) missing on this machine.** 1 thing(s) not prepared yet"
+    )
+    assert setup_summary([VOICE, KEY]) == (
+        "✅ **This machine can run this config.** 1 thing(s) not prepared yet: the "
+        "first start will prepare them itself, and be slower."
+    )
+
+
+def test_each_item_row_says_its_state_and_what_to_do() -> None:
+    assert item_line(EXTRA) == (
+        "**X extra** — ❌ Missing. Not installed. **Install missing extras** installs it "
+        "(`speech-x`)."
     )
     assert (
-        "| Voice Ada | ❌ missing | Not downloaded. **Download missing files** gets it. |"
-        in text
+        item_line(LEXICON)
+        == "**Lexicon** — ❌ Missing. Not built. **Prepare** gets it."
     )
-    assert "| K | ✅ ready | Set. |" in text
-    assert "Voice \\| Bo" in text
-    assert setup_report([]) == "✅ **This machine needs nothing more for this config.**"
-    assert setup_report(items[2:3]).startswith("✅ **This machine is ready")
+    assert item_line(VOICE) == (
+        "**Voice Ada** — ⏳ Not prepared yet. Not downloaded. The first start will "
+        "prepare it itself and be slower; **Prepare** does it now."
+    )
+    assert item_line(KEY) == "**K** — ✅ Ready. Set."
+
+
+def test_a_row_being_prepared_shows_its_progress_then_how_it_ended() -> None:
+    measured = Progress(True, 0.5, "Downloading 150 of 300 MB", 3.0)
+    unmeasured = Progress(True, None, "Building the cache", 12.4)
+
+    assert item_line(VOICE, measured) == (
+        "**Voice Ada** — ⏳ `▓▓▓▓▓▓░░░░░░` 50% · Downloading 150 of 300 MB"
+    )
+    assert (
+        item_line(VOICE, unmeasured) == "**Voice Ada** — ⏳ Building the cache (12 s)"
+    )
+    assert item_line(VOICE, Progress(False, 1.0, "Ready.", 9.0, ok=True)) == (
+        "**Voice Ada** — ✅ Ready."
+    )
+    assert item_line(VOICE, Progress(False, 0.2, "Unreachable.", 2.0, ok=False)) == (
+        "**Voice Ada** — ❌ Failed: Unreachable. **Prepare** tries again."
+    )
 
 
 def test_the_secrets_table_names_each_source() -> None:

@@ -10,12 +10,18 @@ from __future__ import annotations
 
 import copy
 import threading
+import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from app_setup.contract import Description, SetupContract, parse_description
+from app_setup.contract import (
+    ContractError,
+    Description,
+    SetupContract,
+    parse_description,
+)
 from app_setup.extras import find_installer, host_extras, requirement_status
 from app_setup.folder import ConfigFolder
 from app_setup.form import pointer, secret_variables
@@ -25,6 +31,7 @@ __all__ = [
     "App",
     "AppModel",
     "InstallError",
+    "Prepared",
     "Problem",
     "Section",
     "SetupItem",
@@ -85,6 +92,8 @@ class SetupItem:
     status: str  # "ready", "missing" or "unknown"
     detail: str
     preparable: bool
+    # False: the library gets it itself when a session needs it (slower, but not blocking).
+    required: bool
     # For an extra: the host's extras that install it ("" when none carries it).
     host_extras: tuple[str, ...] = field(default=())
 
@@ -95,6 +104,26 @@ class SetupItem:
     @property
     def installable(self) -> bool:
         return self.is_extra and self.status != "ready" and bool(self.host_extras)
+
+    @property
+    def blocking(self) -> bool:
+        """Missing, and a session cannot start without it."""
+        return self.status == "missing" and self.required
+
+    @property
+    def deferred(self) -> bool:
+        """Missing, but a session would get it itself (slower): better prepared now."""
+        return self.status == "missing" and not self.required
+
+
+@dataclass(frozen=True)
+class Prepared:
+    """The outcome of preparing one item: ready, or the failure's message."""
+
+    item: SetupItem
+    ok: bool
+    message: str
+    duration_s: float
 
 
 class InstallError(RuntimeError):
@@ -129,6 +158,10 @@ class _Loaded:
         return self.contract
 
 
+# The keys every `check_setup` item carries (specs/module-contract.md "check_setup").
+_ITEM_KEYS = ("id", "title", "status", "detail", "preparable", "required")
+
+
 def _extra_item(requirement: str) -> dict[str, Any]:
     """A `check_setup` item for *requirement*, from the installed packages' metadata alone:
     for a section whose config the library cannot be asked about yet."""
@@ -140,6 +173,7 @@ def _extra_item(requirement: str) -> dict[str, Any]:
             "status": "ready",
             "detail": "Installed.",
             "preparable": False,
+            "required": True,
         }
     return {
         "id": f"extra:{requirement}",
@@ -148,6 +182,7 @@ def _extra_item(requirement: str) -> dict[str, Any]:
         "status": "missing" if state.state in ("missing", "unavailable") else "unknown",
         "detail": state.detail,
         "preparable": False,
+        "required": True,
     }
 
 
@@ -177,6 +212,9 @@ class AppModel:
         self._locked = locked
         self._loaded = {section.name: _Loaded(section) for section in app.sections}
         self._lock = threading.Lock()
+        # One lock per item being prepared, so an item is never prepared twice at once.
+        self._items_lock = threading.Lock()
+        self._item_locks: dict[tuple[str, str], threading.Lock] = {}
 
     # --- Sections and their contracts.
 
@@ -321,6 +359,7 @@ class AppModel:
                         status="missing",
                         detail=self.unavailable(name) or "Not installed.",
                         preparable=False,
+                        required=True,
                         host_extras=extras,
                     )
                 )
@@ -341,6 +380,16 @@ class AppModel:
         return found
 
     def _item(self, section: str, item: Mapping[str, Any]) -> SetupItem:
+        absent = [key for key in _ITEM_KEYS if key not in item]
+        if absent:
+            raise ContractError(
+                f"section '{section}': check_setup item {item.get('id', item)!r} lacks {absent}"
+            )
+        if not item["required"] and not item["preparable"]:
+            raise ContractError(
+                f"section '{section}': check_setup item {item['id']!r} is neither required "
+                "nor preparable: what a session gets by itself, prepare can get ahead"
+            )
         identifier = str(item.get("id", ""))
         detail = str(item.get("detail", ""))
         carriers: tuple[str, ...] = ()
@@ -361,7 +410,8 @@ class AppModel:
             title=str(item.get("title", identifier)),
             status=status,
             detail=detail,
-            preparable=bool(item.get("preparable", False)),
+            preparable=bool(item["preparable"]),
+            required=bool(item["required"]),
             host_extras=carriers,
         )
 
@@ -369,17 +419,35 @@ class AppModel:
         self, config: Mapping[str, Any], sections: Iterable[str] | None = None
     ) -> list[str]:
         """Why *config* cannot run on this machine yet, in words; empty when it can: its
-        problems, then every missing item. An `unknown` item does not block. Only
-        *sections*, when given."""
+        problems, then every missing required item. A missing item that is not required does
+        not block (the session gets it), nor does an `unknown` one. Only *sections*, when
+        given."""
         reasons = [
             f"{p.path}: {p.message}" for p in self.check_config(config, sections)
         ]
         reasons += [
             f"{item.section}: {item.title} — {item.detail}"
             for item in self.check_setup(config, sections)
-            if item.status == "missing"
+            if item.blocking
         ]
         return reasons
+
+    def to_prepare(
+        self, config: Mapping[str, Any], sections: Iterable[str] | None = None
+    ) -> list[SetupItem]:
+        """The preparable items not ready yet: what Prepare all prepares."""
+        return [
+            item
+            for item in self.check_setup(config, sections)
+            if item.preparable and item.status != "ready"
+        ]
+
+    def deferred(
+        self, config: Mapping[str, Any], sections: Iterable[str] | None = None
+    ) -> list[SetupItem]:
+        """The missing items that are not required: what a session would get by itself,
+        slower, unless they are prepared first."""
+        return [item for item in self.check_setup(config, sections) if item.deferred]
 
     # --- Acting on the machine.
 
@@ -417,24 +485,78 @@ class AppModel:
     def prepare(
         self,
         config: Mapping[str, Any],
+        items: Sequence[SetupItem] | None = None,
         on_progress: Callable[[dict[str, Any]], None] | None = None,
-        sections: Sequence[str] | None = None,
-    ) -> None:
-        """Prepare the sections that have something preparable missing."""
-        items = self.check_setup(config, sections)
-        wanted = {
-            item.section for item in items if item.preparable and item.status != "ready"
-        }
-        for name in self.used(config):
-            if name not in wanted or (sections is not None and name not in sections):
-                continue
-            contract = self.contract(name)
-            if contract is not None:
-                contract.prepare(
-                    copy.deepcopy(dict(config[name])),
-                    on_progress,
-                    base_dir=self._base_dir,
-                )
+    ) -> list[Prepared]:
+        """Make *items* ready, all at the same time, each on its own thread through its
+        section's contract; every preparable item not ready yet when *items* is None.
+
+        *on_progress* receives each contract event with the item's ``section`` and ``id``
+        added, from any thread. Blocks until every item is done; one ``Prepared`` per item, in
+        the order given. A failure is that item's outcome: it never stops the others, and
+        nothing is raised for an item."""
+        chosen = list(self.to_prepare(config) if items is None else items)
+        outcomes: list[Prepared | None] = [None] * len(chosen)
+
+        def run(index: int, item: SetupItem) -> None:
+            outcomes[index] = self.prepare_item(config, item, on_progress)
+
+        threads = [
+            threading.Thread(
+                target=run, args=(index, item), name=f"prepare-{item.id}", daemon=True
+            )
+            for index, item in enumerate(chosen)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        return [outcome for outcome in outcomes if outcome is not None]
+
+    def prepare_item(
+        self,
+        config: Mapping[str, Any],
+        item: SetupItem,
+        on_progress: Callable[[dict[str, Any]], None] | None = None,
+    ) -> Prepared:
+        """Make one *item* ready through its section's contract; its outcome, never raised.
+        *on_progress* receives the contract's events with ``section`` and ``id`` added."""
+        started = time.monotonic()
+
+        def outcome(ok: bool, message: str) -> Prepared:
+            return Prepared(item, ok, message, time.monotonic() - started)
+
+        contract = self.contract(item.section)
+        document = config.get(item.section)
+        if contract is None or not isinstance(document, Mapping):
+            return outcome(False, self.unavailable(item.section) or "Not installed.")
+
+        def progress(event: dict[str, Any]) -> None:
+            if on_progress is not None:
+                on_progress({**event, "section": item.section, "id": item.id})
+
+        guard = self._preparing(item)
+        if not guard.acquire(blocking=False):
+            return outcome(False, "Already being prepared.")
+        try:
+            contract.prepare(
+                copy.deepcopy(dict(document)),
+                item.id,
+                on_progress=progress,
+                base_dir=self._base_dir,
+            )
+        except Exception as exc:  # noqa: BLE001 - the item's outcome, shown on its row
+            return outcome(False, str(exc) or type(exc).__name__)
+        finally:
+            guard.release()
+        return outcome(True, "Ready.")
+
+    def _preparing(self, item: SetupItem) -> threading.Lock:
+        """The lock that keeps one item from being prepared twice at once."""
+        with self._items_lock:
+            return self._item_locks.setdefault(
+                (item.section, item.id), threading.Lock()
+            )
 
     def probe(self, config: Mapping[str, Any], name: str) -> dict[str, Any]:
         contract = self.contract(name)

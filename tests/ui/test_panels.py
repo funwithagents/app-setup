@@ -1,3 +1,5 @@
+import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -11,7 +13,7 @@ from app_setup.folder import ConfigFolder
 from app_setup.secrets import SecretStore
 from app_setup.ui import secrets_panel, setup_panel
 from app_setup.ui.form import render_section, section_title
-from app_setup.ui.panels import LOCKED
+from app_setup.ui.panels import LOCKED, _Preparations, _row
 
 DEFAULTS = {"speech": {"module": {"type": "local-voice"}}}
 
@@ -204,21 +206,28 @@ def test_each_section_has_its_own_checks_acting_on_it_alone(tmp_path: Path) -> N
 
     buttons = [b.value for b in page.blocks.values() if isinstance(b, gr.Button)]
     speech_check, backup_check = _handlers(page, "on_check")
-    speech_problems, _ = speech_check(config)
-    backup_problems, _ = backup_check(config)
+    speech_problems, _, (_, speech_items) = speech_check(config)
+    backup_problems, _, _ = backup_check(config)
 
-    assert buttons.count("Test") == 2 and buttons.count("Install missing extras") == 2
+    assert buttons.count("Test") == 2 and buttons.count("Prepare all") == 2
     assert "voice_id" not in speech_problems
     assert "/backup/module/voice_id" in backup_problems
+    # The rows are drawn from the section's own items.
+    assert [i.id for i in speech_items] == [
+        "extra:speech-lib[local-voice]",
+        "weights:Ada",
+        "lexicon",
+    ]
 
-    # A section the config does not use is hidden, the others shown and checked.
+    # A section the config does not use is hidden, the others shown and checked. Each
+    # section: its block, its problems, its summary, its items, its output.
     redraw = _handler(page, "on_redraw")
     shown = redraw(config)
     hidden = redraw({**config, "use_backup": False})
-    assert (shown[0]["visible"], shown[4]["visible"]) == (True, True)
-    assert (hidden[0]["visible"], hidden[4]["visible"]) == (True, False)
-    assert "/backup/module/voice_id" in shown[5]
-    assert hidden[5] == ""
+    assert (shown[0]["visible"], shown[5]["visible"]) == (True, True)
+    assert (hidden[0]["visible"], hidden[5]["visible"]) == (True, False)
+    assert "/backup/module/voice_id" in shown[6]
+    assert hidden[6] == "" and hidden[8] == (0, [])
 
 
 def test_an_app_with_autostart_gets_its_checkbox_saved_at_once(tmp_path: Path) -> None:
@@ -281,3 +290,56 @@ def test_a_field_not_set_shows_its_default_greyed_and_a_set_one_its_value(
     # A checkbox shows one state: unset, its hint says the default applies.
     assert "Not set: the default (off) applies." in empty["loud"].info
     assert "Not set" not in filled["loud"].info
+
+
+def test_prepare_all_runs_the_rows_side_by_side_each_ending_on_its_own(
+    tmp_path: Path,
+) -> None:
+    lib = SpeechLib()
+    lib.gate = threading.Event()
+    lib.failing = {"weights:Ada"}
+    model = _model(tmp_path, sections=(Section("speech", lib),))
+    preparations = _Preparations(model)
+    weights, lexicon = model.to_prepare(DEFAULTS)
+
+    for item in (weights, lexicon):
+        assert preparations.start(DEFAULTS, item)
+    assert not preparations.start(DEFAULTS, weights)  # never twice at once
+    _wait(lambda: len(lib.started) == 2)
+
+    # Both running at once, each row on its own progress, its Prepare disabled.
+    for item in (weights, lexicon):
+        text, button = _row(preparations, item)
+        assert "⏳" in text and "Starting" in text
+        assert button == {"visible": True, "interactive": False}
+    assert preparations.running("speech")
+
+    lib.gate.set()
+    _wait(lambda: not preparations.running("speech"))
+
+    failed_text, failed_button = _row(preparations, weights)
+    ready_text, ready_button = _row(preparations, lexicon)
+    assert failed_text.startswith(
+        "**Voice Ada** — ❌ Failed: Could not get weights:Ada"
+    )
+    assert failed_button == {"visible": True, "interactive": True}  # tried again
+    assert ready_text == "**Lexicon** — ✅ Ready."
+    assert ready_button["visible"] is False
+    assert lib.lexicon and "Ada" not in lib.downloaded
+
+
+def test_a_busy_section_disables_its_rows(tmp_path: Path) -> None:
+    model = _model(tmp_path)
+    preparations = _Preparations(model)
+    [_, lexicon] = model.to_prepare(DEFAULTS)
+
+    preparations.busy.add("speech")  # a Check, an Install or a Test running
+
+    assert _row(preparations, lexicon)[1] == {"visible": True, "interactive": False}
+
+
+def _wait(condition: Callable[[], bool]) -> None:
+    deadline = time.monotonic() + 5
+    while not condition():
+        assert time.monotonic() < deadline, "timed out"
+        time.sleep(0.01)

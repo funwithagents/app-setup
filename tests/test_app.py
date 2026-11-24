@@ -1,5 +1,7 @@
 import json
 import os
+import threading
+import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -8,7 +10,8 @@ import pytest
 from fakes import SpeechLib
 
 from app_setup import app as app_module
-from app_setup.app import App, AppModel, InstallError, Problem, Section
+from app_setup.app import App, AppModel, InstallError, Prepared, Problem, Section
+from app_setup.contract import ContractError
 from app_setup.extras import RequirementStatus
 from app_setup.folder import ConfigFolder
 from app_setup.secrets import SecretStore, SecretVariable
@@ -175,23 +178,126 @@ def test_a_section_with_problems_still_says_which_extra_to_install(
     assert (installed.status, installed.installable) == ("ready", False)
 
 
+def _states(model: AppModel, config: dict[str, Any]) -> list[tuple[str, str]]:
+    return [(i.id, i.status) for i in model.check_setup(config)]
+
+
 def test_files_are_prepared_then_ready(tmp_path: Path, lib: SpeechLib) -> None:
     model = _model(tmp_path, lib)
     progress: list[dict[str, Any]] = []
 
-    before = [(i.id, i.status) for i in model.check_setup(DEFAULTS)]
-    model.prepare(DEFAULTS, progress.append)
-    after = [(i.id, i.status) for i in model.check_setup(DEFAULTS)]
+    before = _states(model, DEFAULTS)
+    outcomes = model.prepare(DEFAULTS, on_progress=progress.append)
 
     assert before == [
         ("extra:speech-lib[local-voice]", "ready"),
         ("weights:Ada", "missing"),
+        ("lexicon", "missing"),
     ]
-    assert after == [
+    assert _states(model, DEFAULTS) == [
         ("extra:speech-lib[local-voice]", "ready"),
         ("weights:Ada", "ready"),
+        ("lexicon", "ready"),
     ]
-    assert progress == [{"id": "weights:Ada", "fraction": 1.0, "message": "done"}]
+    assert [(o.item.id, o.ok, o.message) for o in outcomes] == [
+        ("weights:Ada", True, "Ready."),
+        ("lexicon", True, "Ready."),
+    ]
+    # Each event names its item and section; each item's own events stay in order.
+    for item in ("weights:Ada", "lexicon"):
+        mine = [e for e in progress if e["id"] == item]
+        assert [(e["section"], e["fraction"]) for e in mine] == [
+            ("speech", 0.0),
+            ("speech", 0.5),
+            ("speech", 1.0),
+        ]
+    assert model.to_prepare(DEFAULTS) == []
+    assert model.prepare(DEFAULTS) == []  # nothing left to prepare
+
+
+def test_one_item_is_prepared_alone(tmp_path: Path, lib: SpeechLib) -> None:
+    model = _model(tmp_path, lib)
+    [weights] = [i for i in model.to_prepare(DEFAULTS) if i.id == "weights:Ada"]
+
+    [outcome] = model.prepare(DEFAULTS, [weights])
+
+    assert outcome.ok
+    assert lib.started == ["weights:Ada"]
+    assert _states(model, DEFAULTS)[1:] == [
+        ("weights:Ada", "ready"),
+        ("lexicon", "missing"),
+    ]
+
+
+def test_items_are_prepared_at_the_same_time(tmp_path: Path, lib: SpeechLib) -> None:
+    model = _model(tmp_path, lib)
+    lib.gate = threading.Event()
+    done: list[list[Prepared]] = []
+    worker = threading.Thread(target=lambda: done.append(model.prepare(DEFAULTS)))
+    worker.start()
+
+    # Both have started while neither can finish: they run side by side.
+    deadline = time.monotonic() + 5
+    while len(lib.started) < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert sorted(lib.started) == ["lexicon", "weights:Ada"]
+    assert not done
+
+    lib.gate.set()
+    worker.join(timeout=5)
+    assert [o.ok for o in done[0]] == [True, True]
+
+
+def test_a_failed_item_fails_alone(tmp_path: Path, lib: SpeechLib) -> None:
+    model = _model(tmp_path, lib)
+    lib.failing = {"weights:Ada"}
+
+    outcomes = model.prepare(DEFAULTS)
+
+    assert [(o.item.id, o.ok, o.message) for o in outcomes] == [
+        ("weights:Ada", False, "Could not get weights:Ada: the server is unreachable."),
+        ("lexicon", True, "Ready."),
+    ]
+    assert _states(model, DEFAULTS)[1:] == [
+        ("weights:Ada", "missing"),
+        ("lexicon", "ready"),
+    ]
+
+
+def test_a_missing_item_that_is_not_required_does_not_block(
+    tmp_path: Path, lib: SpeechLib
+) -> None:
+    model = _model(tmp_path, lib)
+    lib.lexicon = True
+
+    assert [i.id for i in model.deferred(DEFAULTS)] == ["weights:Ada"]
+    assert model.blockers(DEFAULTS) == []  # the session downloads the voice itself
+
+
+def test_an_item_outside_the_contract_is_refused(
+    tmp_path: Path, lib: SpeechLib
+) -> None:
+    model = _model(tmp_path, lib)
+    honest = lib.check_setup
+
+    def without_required(config: dict[str, Any], **kwargs: Any) -> list[dict[str, Any]]:
+        return [
+            {k: v for k, v in i.items() if k != "required"}
+            for i in honest(config, **kwargs)
+        ]
+
+    def neither(config: dict[str, Any], **kwargs: Any) -> list[dict[str, Any]]:
+        return [
+            {**i, "required": False, "preparable": False}
+            for i in honest(config, **kwargs)
+        ]
+
+    lib.check_setup = without_required  # type: ignore[method-assign]
+    with pytest.raises(ContractError, match=r"lacks \['required'\]"):
+        model.check_setup(DEFAULTS)
+    lib.check_setup = neither  # type: ignore[method-assign]
+    with pytest.raises(ContractError, match="neither required nor preparable"):
+        model.check_setup(DEFAULTS)
 
 
 def test_a_section_the_config_does_not_use_is_neither_checked_nor_run(
@@ -308,12 +414,13 @@ def test_blockers_say_why_the_config_cannot_run_yet(
 ) -> None:
     model = _model(tmp_path, lib)
 
-    assert model.blockers(DEFAULTS) == ["speech: Voice Ada — Not downloaded yet."]
+    # The voice is not required (the session downloads it); the lexicon is.
+    assert model.blockers(DEFAULTS) == ["speech: Lexicon — Not built yet."]
     assert model.blockers({"speech": {"module": {"type": "cloud-voice"}}})[0] == (
         "/speech/module/voice_id: voice_id is required"
     )
 
-    lib.downloaded.add("Ada")
+    lib.lexicon = True
     assert model.blockers(DEFAULTS) == []
 
 

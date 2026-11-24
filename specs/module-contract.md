@@ -28,7 +28,11 @@ def required_extras(config: dict) -> list[str]: ...
 def check_config(config: dict) -> list[dict]: ...
 def check_setup(config: dict, *, base_dir: str | None = None) -> list[dict]: ...
 def prepare(
-    config: dict, on_progress: Callable[[dict], None] | None = None, *, base_dir: str | None = None
+    config: dict,
+    item: str,
+    *,
+    on_progress: Callable[[dict], None] | None = None,
+    base_dir: str | None = None,
 ) -> None: ...
 def options(name: str, config: dict, *, base_dir: str | None = None) -> list[dict]: ...
 def probe(config: dict, *, base_dir: str | None = None) -> dict: ...
@@ -48,11 +52,11 @@ What each answers, in the order an app uses them:
 | `required_extras` | Which extras does this config need? | yes |
 | `check_config` | What is wrong in the config itself? | yes |
 | `check_setup` | What is ready or missing on this machine for it to run: extras, keys, files? | no |
-| `prepare` | — makes the missing files ready (downloads) | no |
+| `prepare` | — makes one missing item ready (a download, a cache built) | no |
 | `options` | What can this field be set to (voices, devices)? | no |
 | `probe` | Does it actually work? Runs it once | no |
 
-The usual order: `check_config`, then `check_setup`; the user installs the missing extras and sets the missing keys; `prepare` downloads the files; `check_setup` again; `probe` when wanted; then the session starts. `check_setup` comes before `prepare` because it says whether there is anything to prepare, and `prepare` needs the extras installed.
+The usual order: `check_config`, then `check_setup`; the user installs the missing extras and sets the missing keys; `prepare` makes each preparable item ready; `check_setup` again; `probe` when wanted; then the session starts. `check_setup` comes before `prepare` because it says whether there is anything to prepare, and `prepare` needs the extras installed.
 
 What each may rely on:
 
@@ -211,47 +215,57 @@ check_setup(config) -> [
     "title": "Local voice extra",
     "status": "ready",
     "detail": "Installed.",
-    "preparable": false
+    "preparable": false,
+    "required": true
   },
   {
     "id": "weights:local-voice/Ada",
     "title": "Local voice Ada",
     "status": "missing",
     "detail": "Not downloaded yet (about 300 MB).",
-    "preparable": true
+    "preparable": true,
+    "required": false
   }
 ]
 ```
 
 Everything this config needs on **this machine** to run, each as an item. `[]` when it needs nothing.
 
-- `id` — stable for a given config; `prepare` reports progress against it.
+- `id` — stable for a given config and unique within it; `prepare` takes it to prepare that item.
 - `title` — what the item is.
 - `status` — `ready`, `missing`, or `unknown` (the library cannot tell without doing the work).
 - `detail` — one sentence: where it is, how big, or what the user must do.
 - `preparable` — whether `prepare` can make it ready. `false` is for what only the user can fix; `detail` then says how.
+- `required` — whether a session can start without it. `true`: the session fails or cannot start while it is missing (an extra, a key, a local file the config points at). `false`: the library gets it itself when a session needs it (a model it downloads on first load, a dataset fetched at the first use) — the session can start, but its start or its first use is slower and needs the network, so getting it during setup is better. Only a preparable item can be `false`: what the library gets by itself, `prepare` can get ahead of time.
+
+Every key is present in every item. app-setup refuses an item missing one, or not required and not preparable, as a contract error naming the section and the item.
 
 The items, in this order:
 
-1. **Extras** — one item per extra the config needs (`id` `extra:<requirement>`), never preparable. The library finds out by **trying the imports** the selected module needs, which is what will run: a missing package, a broken install, a version missing a symbol, a missing native library all show here. The detail of a missing one is the library's install hint. Installing is the host's business (app-setup's [extras.md](extras.md)), which also tells, from package metadata, whether the extra can be installed on this platform at all.
-2. **Keys** — one item per environment variable the config names for a secret (an `x-secret-env` field), `ready` when it is set and non-empty, else `missing`, never preparable. A key written in the config itself needs no item. Whether the provider *accepts* the key is not checked here.
-3. **Files** — model weights, voice files, a local file the config points at. Only once the extras are installed: looking them up may need the provider's library. Preparable when the library can download them; a local path the config names is `ready` or `missing` and never preparable.
+1. **Extras** — one item per extra the config needs (`id` `extra:<requirement>`), never preparable, always required. The library finds out by **trying the imports** the selected module needs, which is what will run: a missing package, a broken install, a version missing a symbol, a missing native library all show here. The detail of a missing one is the library's install hint. Installing is the host's business (app-setup's [extras.md](extras.md)), which also tells, from package metadata, whether the extra can be installed on this platform at all.
+2. **Keys** — one item per environment variable the config names for a secret (an `x-secret-env` field), `ready` when it is set and non-empty, else `missing`, never preparable, always required. A key written in the config itself needs no item. Whether the provider *accepts* the key is not checked here.
+3. **Files** — model weights, voice files, a local file the config points at. Only once the extras are installed: looking them up may need the provider's library. Preparable when the library can download them, and then not required when a session downloads them by itself when missing; a local path the config names is `ready` or `missing`, never preparable, always required.
 
 It works on the base install (a missing extra is one of its answers), and on a config `check_config` accepts. It is **local and fast**: it imports, reads the environment, looks at caches, files and the path, and makes no network call. Importing a heavy provider can take a second or two; the import stays loaded in the process, which a session starting next would pay anyway.
 
-The environment it reads is the process's: an app that keeps keys in a file loads them into the environment before calling it (app-setup's app does). Start is enabled when no item is `missing`. An `unknown` item does not block it.
+The environment it reads is the process's: an app that keeps keys in a file loads them into the environment before calling it (app-setup's app does). Start is enabled when no **required** item is `missing`. A missing item that is not required does not block it: the session will get it. An `unknown` item does not block it either.
 
 ## `prepare`
 
 ```python
-prepare(config, on_progress=None) -> None
+prepare(config, "weights:local-voice/Ada", on_progress=print) -> None
 ```
 
-Makes every `preparable` item of this config ready: today, downloading model weights. It needs the config's extras installed. It blocks until done and raises on failure, with a message for the user.
+Makes **one** preparable item of this config ready: downloading model weights, building a cache a first run would build. It needs the config's extras installed. It blocks until done and raises on failure, with a message for the user. Preparing several items is app-setup's: it calls `prepare` once per item, at the same time, so each item has its own progress and its own outcome, and one failing leaves the others going ([app.md](app.md)).
 
-- **Idempotent.** With everything ready it returns at once.
-- **It leaves the rest alone.** Items that are not `preparable` are not its business.
-- `on_progress`, when given, is called with `{"id": …, "fraction": 0.4, "message": "…"}`; `fraction` is `None` when the library cannot measure. It may be called from any thread.
+- **Idempotent.** An item already ready returns at once.
+- **One item, the rest left alone.** An `item` that is not a preparable item of this config raises `ValueError` naming it.
+- **Concurrent calls.** Two calls for two different items of a config may run at the same time, on two threads, and must both succeed: an item's preparation does not rely on another's. app-setup never runs two calls for the same item at once.
+- **Progress.** `on_progress`, when given, is called with `{"fraction": 0.4, "message": "…"}`, about this item:
+  - first once as it starts (`fraction` `0.0`, or `None` when the library cannot measure), then as it advances, then once with `fraction` `1.0` when it is ready;
+  - `fraction` is the share done, from `0.0` to `1.0`, or `None` when the library cannot measure (a size it does not know); a library measures what it can — a download reports the bytes received against the size it expects;
+  - `message` says what is happening in a few words ("Downloading 120 of 300 MB");
+  - it may be called from any thread, and as often as the library likes: app-setup shows the latest.
 
 ## `options`
 
@@ -286,7 +300,7 @@ A library with nothing worth running for a config returns `ok: true` and says so
 
 ## Composition
 
-A library that embeds another's config (a robot library carrying its voice's config) builds its contract from the other's: its schema places the embedded schema at that property, and its `required_extras`, `check_config`, `check_setup`, `prepare`, `options` and `probe` delegate for that part, re-rooting `path`s and keeping requirement strings as they are.
+A library that embeds another's config (a robot library carrying its voice's config) builds its contract from the other's: its schema places the embedded schema at that property, and its `required_extras`, `check_config`, `check_setup`, `prepare`, `options` and `probe` delegate for that part, re-rooting `path`s and keeping requirement strings as they are. Its `prepare` hands an item that is the embedded contract's own (an id its `check_setup` returned) to the embedded contract's `prepare`.
 
 A host does the same one level up: its app config is one section per library, and app-setup composes the sections' contracts ([config-folder.md](config-folder.md), [app.md](app.md)). A host's own sections (settings no library owns) are described by a contract the host writes itself, in the same shape.
 
@@ -299,7 +313,7 @@ A section whose *library* is itself optional for the host (an app that installs 
 - **`SetupContract`** — the `Protocol` above.
 - **`parse_description(data) -> Description`** — turns a `config_schema()` result into typed, frozen objects the form is drawn from, and raises `ContractError` (a `ValueError`) naming the path of anything outside this spec: an unknown contract version, an unsupported keyword, a `oneOf` without a discriminator, a field without a `description`.
 - **`check_contract(contract, examples)`** — the conformance check a library runs in its own test suite (app-setup is a dev dependency there, never a runtime one). Given the contract and a list of example configs, it asserts:
-  - the contract object has the seven callables;
+  - the contract object has the seven callables, each taking the keywords above (`base_dir` on the four that look at the machine, `prepare` taking the item, then `on_progress`);
   - `config_schema()` parses, and returns the same value twice;
   - every example passes `check_config`;
   - for every module of every choice, a config selecting it passes `check_config` with every default of the schema written out explicitly. It starts from the first example selecting that module; with none, from the module's required fields at their defaults, and a module with a required field that has no default must be covered by an example;
@@ -317,7 +331,7 @@ A section whose *library* is itself optional for the host (an app that installs 
 
 - `parse_description`: a description using every supported keyword parses into the expected objects; each refusal (unknown version, unsupported keyword, malformed `oneOf`, missing `description`, an `x-` keyword on the wrong kind of field) raises `ContractError` naming the path.
 - The discriminator is found for a nested module block and for a flat object with common fields.
-- `check_contract` passes on a correct contract and fails, naming the cause, on each broken one: a missing function, a default `check_config` refuses, an example key the schema lacks, a requirement naming an extra that does not exist, a `requirements` that raises on `{}`. A library's own test for `base_dir`: a relative path in its config is found against the folder given, not against the working directory.
+- `check_contract` passes on a correct contract and fails, naming the cause, on each broken one: a missing function, a default `check_config` refuses, an example key the schema lacks, a requirement naming an extra that does not exist, a `requirements` that raises on `{}`, a `prepare` that does not take an item. A library's own test for `base_dir`: a relative path in its config is found against the folder given, not against the working directory.
 
 ## Open questions
 

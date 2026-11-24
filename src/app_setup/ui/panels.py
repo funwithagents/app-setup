@@ -11,19 +11,22 @@ from __future__ import annotations
 import itertools
 import queue
 import threading
-from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+import time
+from collections.abc import Callable, Iterator, Sequence
+from dataclasses import dataclass, field
 from typing import Any
 
 import gradio as gr
 
-from app_setup.app import AppModel, InstallError
+from app_setup.app import AppModel, InstallError, SetupItem
 from app_setup.ui.form import render_section, section_title
 from app_setup.ui.report import (
+    Progress,
     config_report,
     env_file_rows,
+    item_line,
     secrets_report,
-    setup_report,
+    setup_summary,
 )
 
 __all__ = ["SetupPanel", "secrets_panel", "setup_panel"]
@@ -74,11 +77,88 @@ def _streamed(work: Callable[[Callable[[str], None]], None]) -> Iterator[str]:
     yield "\n".join(text)
 
 
-def _reports(model: AppModel, config: Config, name: str) -> tuple[str, str]:
-    """Section *name*'s problems, then what the machine is missing for it."""
-    return config_report(model.check_config(config, [name])), setup_report(
-        model.check_setup(config, [name])
-    )
+@dataclass
+class _Run:
+    """One item's preparation: its latest progress, then how it ended."""
+
+    started: float
+    fraction: float | None = None
+    message: str = ""
+    ok: bool | None = None  # None while it runs
+
+    def progress(self) -> Progress:
+        return Progress(
+            running=self.ok is None,
+            fraction=self.fraction,
+            message=self.message,
+            elapsed_s=time.monotonic() - self.started,
+            ok=self.ok,
+        )
+
+
+@dataclass
+class _Preparations:
+    """The panel's preparations, shared by every browser tab (they act on the machine):
+    each item's run, and the sections busy with Check, Install or Test."""
+
+    model: AppModel
+    runs: dict[tuple[str, str], _Run] = field(default_factory=dict)
+    busy: set[str] = field(default_factory=set)
+    lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def start(self, config: Config, item: SetupItem) -> bool:
+        """Prepare *item* on its own thread; False when it is already being prepared."""
+        key = (item.section, item.id)
+        with self.lock:
+            if key in self.runs and self.runs[key].ok is None:
+                return False
+            run = self.runs[key] = _Run(started=time.monotonic())
+
+        def progress(event: dict[str, Any]) -> None:
+            fraction = event.get("fraction")
+            with self.lock:
+                run.fraction = (
+                    float(fraction) if isinstance(fraction, int | float) else None
+                )
+                run.message = str(event.get("message", ""))
+
+        def work() -> None:
+            outcome = self.model.prepare_item(config, item, progress)
+            with self.lock:
+                run.ok, run.message = outcome.ok, outcome.message
+
+        threading.Thread(target=work, name=f"prepare-{item.id}", daemon=True).start()
+        return True
+
+    def progress(self, item: SetupItem) -> Progress | None:
+        with self.lock:
+            run = self.runs.get((item.section, item.id))
+            return run.progress() if run is not None else None
+
+    def running(self, section: str) -> bool:
+        with self.lock:
+            return any(
+                key[0] == section and run.ok is None for key, run in self.runs.items()
+            )
+
+    def forget_finished(self, section: str) -> None:
+        """Drop the section's finished runs: a new check says where they stand."""
+        with self.lock:
+            for key in [k for k, r in self.runs.items() if k[0] == section]:
+                if self.runs[key].ok is not None:
+                    del self.runs[key]
+
+
+def _row(preparations: _Preparations, item: SetupItem) -> tuple[str, dict[str, Any]]:
+    """An item row's text and its Prepare button's state."""
+    progress = preparations.progress(item)
+    running = progress is not None and progress.running
+    prepared = progress is not None and progress.ok is True
+    wanted = item.preparable and item.status != "ready" and not prepared
+    return item_line(item, progress), {
+        "visible": wanted,
+        "interactive": not running and item.section not in preparations.busy,
+    }
 
 
 @dataclass(frozen=True)
@@ -88,15 +168,36 @@ class _Section:
     name: str
     block: gr.Column
     config_md: gr.Markdown
-    setup_md: gr.Markdown
+    summary_md: gr.Markdown
+    checked: gr.State  # (a counter, the section's items): its rows are drawn from it
     output: gr.Textbox
+    buttons: tuple[gr.Button, ...]
+    # The section's problems, its summary and its items for the rows, for a config.
+    reports: Callable[[Config], tuple[str, str, tuple[int, list[SetupItem]]]]
 
 
 def _section_block(
-    model: AppModel, name: str, draft: gr.State, revision: gr.State
+    model: AppModel,
+    name: str,
+    draft: gr.State,
+    revision: gr.State,
+    preparations: _Preparations,
+    timer: gr.Timer,
 ) -> _Section:
-    """Section *name*: its title, its form, and its own Check, Install, Download and
-    Test, acting on it alone, with their results under them."""
+    """Section *name*: its title, its form, and its own Check, Install, Prepare all and
+    Test, acting on it alone; then one row per item, each with its own Prepare."""
+    checks = itertools.count(1)
+
+    def reports(config: Config) -> tuple[str, str, tuple[int, list[SetupItem]]]:
+        """The section's problems, its summary, and its items for the rows."""
+        items = model.check_setup(config, [name])
+        preparations.forget_finished(name)
+        return (
+            config_report(model.check_config(config, [name])),
+            setup_summary(items),
+            (next(checks), items),
+        )
+
     # A panel-styled column, not a `gr.Group`: inside a group, gradio draws buttons flat.
     with gr.Column(variant="panel") as block:
         gr.Markdown(f"### {section_title(model, name)}")
@@ -108,29 +209,83 @@ def _section_block(
         with gr.Row():
             check = gr.Button("Check", scale=0)
             install = gr.Button("Install missing extras", scale=0)
-            prepare = gr.Button("Download missing files", scale=0)
+            prepare_all = gr.Button("Prepare all", scale=0)
             probe = gr.Button("Test", scale=0)
         config_md = gr.Markdown()
-        setup_md = gr.Markdown()
+        summary_md = gr.Markdown()
+        checked = gr.State((0, []))
+
+        @gr.render(inputs=[checked], triggers=[checked.change])
+        def rows(state: tuple[int, list[SetupItem]]) -> None:
+            _, items = state
+            lines: list[gr.Markdown] = []
+            buttons: list[gr.Button] = []
+            for item in items:
+                text, button_state = _row(preparations, item)
+                with gr.Row(equal_height=True):
+                    line = gr.Markdown(text)
+                    button = gr.Button("Prepare", size="sm", scale=0, **button_state)
+
+                def on_prepare(
+                    config: Config, item: SetupItem = item
+                ) -> tuple[Any, Any]:
+                    preparations.start(config, item)
+                    text, button_state = _row(preparations, item)
+                    return text, gr.update(**button_state)
+
+                button.click(
+                    on_prepare,
+                    inputs=[draft],
+                    outputs=[line, button],
+                    show_progress="hidden",
+                )
+                lines.append(line)
+                buttons.append(button)
+            if not items:
+                return
+
+            def on_rows_tick(items: Sequence[SetupItem] = items) -> list[Any]:
+                states = [_row(preparations, item) for item in items]
+                return [text for text, _ in states] + [
+                    gr.update(**button_state) for _, button_state in states
+                ]
+
+            timer.tick(on_rows_tick, outputs=[*lines, *buttons], show_progress="hidden")
+
         output = gr.Textbox(
             label="Output", lines=6, max_lines=20, interactive=False, visible=False
         )
 
-    def on_check(config: Config) -> tuple[str, str]:
-        return _reports(model, config, name)
-
-    check.click(on_check, inputs=[draft], outputs=[config_md, setup_md])
+    buttons = (check, install, prepare_all, probe)
 
     def shown(text: str) -> Any:
         return gr.update(value=text, visible=True)
 
-    def on_install(config: Config) -> Iterator[tuple[Any, Any, Any]]:
+    def busy(on: bool) -> list[Any]:
+        """Mark the section busy (its buttons and rows disabled) or free again."""
+        if on:
+            preparations.busy.add(name)
+        else:
+            preparations.busy.discard(name)
+        return [gr.update(interactive=not on) for _ in buttons]
+
+    def on_busy() -> list[Any]:
+        return busy(True)
+
+    def on_free() -> list[Any]:
+        return busy(False)
+
+    def on_check(config: Config) -> tuple[Any, ...]:
+        return reports(config)
+
+    check.click(on_busy, outputs=list(buttons)).then(
+        on_check, inputs=[draft], outputs=[config_md, summary_md, checked]
+    ).then(on_free, outputs=list(buttons))
+
+    def on_install(config: Config) -> Iterator[tuple[Any, ...]]:
         extras = model.missing_extras(config, [name])
         if not extras:
-            yield (
-                shown("No missing extra the host can install."),
-                *_reports(model, config, name),
-            )
+            yield shown("No missing extra the host can install."), *reports(config)
             return
 
         def work(emit: Callable[[str], None]) -> None:
@@ -144,28 +299,18 @@ def _section_block(
 
         text = ""
         for text in _streamed(work):
-            yield shown(text), gr.skip(), gr.skip()
-        yield shown(text), *_reports(model, config, name)
+            yield shown(text), gr.skip(), gr.skip(), gr.skip()
+        yield shown(text), *reports(config)
 
-    install.click(on_install, inputs=[draft], outputs=[output, config_md, setup_md])
+    install.click(on_busy, outputs=list(buttons)).then(
+        on_install, inputs=[draft], outputs=[output, config_md, summary_md, checked]
+    ).then(on_free, outputs=list(buttons))
 
-    def on_prepare(config: Config) -> Iterator[tuple[Any, Any, Any]]:
-        def work(emit: Callable[[str], None]) -> None:
-            def progress(event: dict[str, Any]) -> None:
-                fraction = event.get("fraction")
-                share = f" {fraction:.0%}" if isinstance(fraction, int | float) else ""
-                emit(f"{event.get('id', '')}{share}: {event.get('message', '')}")
+    def on_prepare_all(config: Config) -> None:
+        for item in model.to_prepare(config, [name]):
+            preparations.start(config, item)
 
-            emit("Preparing…")
-            model.prepare(config, progress, sections=[name])
-            emit("Done.")
-
-        text = ""
-        for text in _streamed(work):
-            yield shown(text), gr.skip(), gr.skip()
-        yield shown(text), *_reports(model, config, name)
-
-    prepare.click(on_prepare, inputs=[draft], outputs=[output, config_md, setup_md])
+    prepare_all.click(on_prepare_all, inputs=[draft], show_progress="hidden")
 
     def on_probe(config: Config) -> Any:
         result = model.probe(config, name)
@@ -174,15 +319,20 @@ def _section_block(
             f"{mark} {result.get('message', '')} ({result.get('duration_s', 0):.1f} s)"
         )
 
-    probe.click(on_probe, inputs=[draft], outputs=[output])
+    probe.click(on_busy, outputs=list(buttons)).then(
+        on_probe, inputs=[draft], outputs=[output]
+    ).then(on_free, outputs=list(buttons))
 
-    return _Section(name, block, config_md, setup_md, output)
+    return _Section(
+        name, block, config_md, summary_md, checked, output, buttons, reports
+    )
 
 
 def setup_panel(model: AppModel) -> SetupPanel:
     """Draw the Setup panel of *model*'s app here: Save, Revert and Reset for the whole
-    config, then one block per section the config uses: its form, and its own checks
-    (Check, Install, Download, Test) acting on it alone."""
+    config, then one block per section the config uses: its form, its own checks (Check,
+    Install, Prepare all, Test) acting on it alone, and a row per item it needs, each with
+    its own Prepare and progress."""
     draft = gr.State({})
     revision = gr.State(0)
     saved = gr.State(0)
@@ -210,8 +360,12 @@ def setup_panel(model: AppModel) -> SetupPanel:
     notice = gr.Markdown()
     gr.Markdown(REQUIRED)
 
+    # The item rows' progress, on a timer of their own: sharing the lock line's timer
+    # stopped the lock line updating in the browser.
+    rows_timer = gr.Timer(0.5)
+    preparations = _Preparations(model)
     sections = [
-        _section_block(model, section.name, draft, revision)
+        _section_block(model, section.name, draft, revision, preparations, rows_timer)
         for section in model.app.sections
     ]
     timer = gr.Timer(1.0)
@@ -245,7 +399,7 @@ def setup_panel(model: AppModel) -> SetupPanel:
         updates: list[Any] = []
         for section in sections:
             visible = section.name in used
-            reports = _reports(model, config, section.name) if visible else ("", "")
+            reports = section.reports(config) if visible else ("", "", (0, []))
             updates += [
                 gr.update(visible=visible),
                 *reports,
@@ -266,7 +420,8 @@ def setup_panel(model: AppModel) -> SetupPanel:
             for component in (
                 section.block,
                 section.config_md,
-                section.setup_md,
+                section.summary_md,
+                section.checked,
                 section.output,
             )
         ],
