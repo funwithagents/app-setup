@@ -85,7 +85,7 @@ model = AppModel(APP, ConfigFolder(default_folder(APP.name), APP.default_config)
 
 The checks take an optional `sections`: the Setup panel asks about one section at a time, so its Check, Install, Prepare and Test act on that section alone.
 
-A `Prepared` is an item's outcome: `ok`, and the failure's message when not. A `SetupItem` is the contract's item (`required` included) with its `section` and `host_extras`; `installable` is true for a missing extra some host extra carries. An item breaking the contract's rules (a key missing, not required and not preparable) raises `ContractError` naming the section and the item: it is the library's bug, and shows in its own tests and demo.
+A `Prepared` is an item's outcome: `ok`, and the failure's message when not. A `SetupItem` is the contract's item (`required` included) with its `section` and `host_extras`; `installable` is true for a missing extra some host extra carries. `variable` names the environment variable a **key** item is about, so the Setup panel can offer a field to set it: the contract has one item per variable the config names for a key, not preparable and required, and gives it no kind ([module-contract.md](module-contract.md)), so an item that is neither an extra nor preparable is a key item when its `id` or `title` names, as a whole word, one of the variables its section's document names (`x-secret-env` fields, their defaults included); `None` for every other item. An item breaking the contract's rules (a key missing, not required and not preparable) raises `ContractError` naming the section and the item: it is the library's bug, and shows in its own tests and demo.
 
 The app's own Start uses the model this way: read `saved_config()`, refuse with `blockers(config)` when there are any, then build its runtime from `used_config(config)`, relative paths resolved against `path`. Before building, an app may prepare what the session would otherwise get by itself — `prepare(config, deferred(config), on_progress)`, its progress shown in the app's own session view — so the first use is not the slow one; whether it does is the app's choice (app-setup does not run a session).
 
@@ -99,7 +99,7 @@ The app's own Start uses the model this way: read `saved_config()`, refuse with 
 - a missing item that is not required listed in `deferred`, not in `blockers`; a malformed item refused;
 - a section the config does not use; a library that does not import, then does;
 - the install delegated to the installer, and refused without one;
-- the secrets named and their sources;
+- the secrets named and their sources; a key item told its variable, the other items none;
 - building the model writes the default config and loads the `.env` under the shell's variables;
 - the blockers of a config, then none once ready;
 - the config refused while the app locks it, and never locked without a lock;
