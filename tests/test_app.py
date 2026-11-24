@@ -348,3 +348,24 @@ def test_probe_and_options_reach_the_section_s_contract(
         "Bo (en)",
         "Cy (fr)",
     ]
+
+
+def test_the_checks_can_be_asked_about_some_sections_only(
+    tmp_path: Path, lib: SpeechLib
+) -> None:
+    model = _model(
+        tmp_path,
+        lib,
+        sections=(Section("speech", lib), Section("backup", SpeechLib())),
+    )
+    config = {**DEFAULTS, "backup": {"module": {"type": "cloud-voice"}}}
+
+    assert model.check_config(config, ["speech"]) == []
+    assert [p.section for p in model.check_config(config, ["backup"])] == ["backup"]
+    assert {i.section for i in model.check_setup(config, ["speech"])} == {"speech"}
+    assert all(
+        reason.startswith(("/speech", "speech:"))
+        for reason in model.blockers(config, ["speech"])
+    )
+    assert model.blockers(config, ["backup"])[0].startswith("/backup/module/voice_id")
+    assert model.check_config(config) == model.check_config(config, ["backup"])

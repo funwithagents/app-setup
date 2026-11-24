@@ -10,7 +10,7 @@ from module_setup.app import App, AppModel, Section
 from module_setup.folder import ConfigFolder
 from module_setup.secrets import SecretStore
 from module_setup.ui import secrets_panel, setup_panel
-from module_setup.ui.form import render_sections
+from module_setup.ui.form import render_section, section_title
 from module_setup.ui.panels import LOCKED
 
 DEFAULTS = {"speech": {"module": {"type": "local-voice"}}}
@@ -34,7 +34,8 @@ def _drawn(model: AppModel, config: dict[str, Any]) -> list[Any]:
     """The components the form draws for *config*."""
     with gr.Blocks() as page:
         draft, revision = gr.State(config), gr.State(0)
-        render_sections(model, config, draft, revision)
+        for name in model.used(config):
+            render_section(model, name, config, draft, revision)
     return [block for block in page.blocks.values() if isinstance(block, Component)]
 
 
@@ -88,18 +89,27 @@ def test_a_section_without_its_library_says_what_to_install(tmp_path: Path) -> N
 
     markdown = [c.value for c in _drawn(model, DEFAULTS) if isinstance(c, gr.Markdown)]
 
-    assert "### Speech" in markdown
+    assert section_title(model, "speech") == "Speech"
     assert any("the `speech` extra" in text for text in markdown)
+
+
+def _handlers(page: gr.Blocks, name: str) -> list[Callable[..., Any]]:
+    """Every function a panel registered under *name*, once each, in the order drawn (one
+    per section for a section's own buttons)."""
+    found: list[Callable[..., Any]] = []
+    for f in page.fns.values():
+        fn = f.fn
+        if fn is not None and getattr(fn, "__name__", "") == name and fn not in found:
+            found.append(fn)
+    return found
 
 
 def _handler(page: gr.Blocks, name: str) -> Callable[..., Any]:
     """The function a panel registered under *name* (for one event or several), to call as
     gradio would."""
-    found = {f.fn for f in page.fns.values() if getattr(f.fn, "__name__", "") == name}
+    found = _handlers(page, name)
     assert len(found) == 1, found
-    fn = found.pop()
-    assert fn is not None
-    return fn
+    return found[0]
 
 
 def test_the_panels_are_drawn_where_the_app_puts_them(tmp_path: Path) -> None:
@@ -116,7 +126,8 @@ def test_the_panels_are_drawn_where_the_app_puts_them(tmp_path: Path) -> None:
     tabs = [b.label for b in page.blocks.values() if isinstance(b, gr.Tab)]
     labels = _labels(list(page.blocks.values()))
     assert tabs == ["Talk", "Setup", "Keys"]  # the app's tabs, and only those
-    assert "Say" in labels and "Section to test" in labels and "Variable" in labels
+    assert "Say" in labels and "Variable" in labels
+    assert "Section to test" not in labels  # each section has its own Test
     assert isinstance(setup.draft, gr.State) and isinstance(setup.saved, gr.State)
 
 
@@ -167,3 +178,44 @@ def test_the_secrets_panel_lists_the_env_file_s_other_variables_by_name(
     assert "| `CLOUD_VOICE_KEY` | ✅ the folder's .env |" in text
     assert "not named by the current config: `OLD_KEY`." in text
     assert "s3cret" not in text  # names only, never a value
+
+
+def test_each_section_has_its_own_checks_acting_on_it_alone(tmp_path: Path) -> None:
+    model = _model(
+        tmp_path,
+        sections=(
+            Section("speech", SpeechLib(), title="Speech"),
+            Section(
+                "backup",
+                SpeechLib(),
+                title="Backup voice",
+                when=lambda config: bool(config.get("use_backup")),
+            ),
+        ),
+    )
+    # The backup voice's config has a problem; the main voice's has none.
+    config = {
+        **DEFAULTS,
+        "use_backup": True,
+        "backup": {"module": {"type": "cloud-voice"}},
+    }
+    with gr.Blocks() as page:
+        setup_panel(model)
+
+    buttons = [b.value for b in page.blocks.values() if isinstance(b, gr.Button)]
+    speech_check, backup_check = _handlers(page, "on_check")
+    speech_problems, _ = speech_check(config)
+    backup_problems, _ = backup_check(config)
+
+    assert buttons.count("Test") == 2 and buttons.count("Install missing extras") == 2
+    assert "voice_id" not in speech_problems
+    assert "/backup/module/voice_id" in backup_problems
+
+    # A section the config does not use is hidden, the others shown and checked.
+    redraw = _handler(page, "on_redraw")
+    shown = redraw(config)
+    hidden = redraw({**config, "use_backup": False})
+    assert (shown[0]["visible"], shown[4]["visible"]) == (True, True)
+    assert (hidden[0]["visible"], hidden[4]["visible"]) == (True, False)
+    assert "/backup/module/voice_id" in shown[5]
+    assert hidden[5] == ""

@@ -63,20 +63,22 @@ model = AppModel(APP, ConfigFolder(default_folder(APP.name), APP.default_config)
 
 | Method | What it does |
 |---|---|
-| `used(config)` | The sections the config uses, in declaration order |
+| `used(config, sections=None)` | The sections the config uses, in declaration order (only those of `sections`, when given) |
 | `saved_config()`, `save(config)`, `reset()` | Read, save, or reset to the default the config in the folder. `save` and `reset` raise `RuntimeError` while the config is locked |
 | `locked()` | Whether the app is using the saved config |
 | `path` | The folder: where a section's relative paths resolve |
-| `check_config(config)` | Every section's `check_config`, each problem as `Problem(section, path, message)`, the path a JSON Pointer into the app's config (`/speech/module/voice_id`). A used section absent from the config is a problem at `/<section>` |
-| `check_setup(config)` | Every section's `check_setup`, each item as a `SetupItem`; a section whose document has problems is not asked, since the contract asks it only about a config `check_config` accepts: its extras come instead from its `required_extras` (which takes an incomplete config) and the installed packages' metadata, so an extra can be installed while the config is still being fixed — a field filled from a list the extra provides would otherwise never be filled. An extra's item is told which host extras install it (`host_extras`, from [extras.md](extras.md)); an extra unavailable on this platform says so and has none. A section whose library does not import is one missing item, installable by its `host_extra` |
-| `missing_extras(config)` | The host extras that install what is missing: the first carrier of each installable item |
+| `check_config(config, sections=None)` | Every section's `check_config`, each problem as `Problem(section, path, message)`, the path a JSON Pointer into the app's config (`/speech/module/voice_id`). A used section absent from the config is a problem at `/<section>` |
+| `check_setup(config, sections=None)` | Every section's `check_setup`, each item as a `SetupItem`; a section whose document has problems is not asked, since the contract asks it only about a config `check_config` accepts: its extras come instead from its `required_extras` (which takes an incomplete config) and the installed packages' metadata, so an extra can be installed while the config is still being fixed — a field filled from a list the extra provides would otherwise never be filled. An extra's item is told which host extras install it (`host_extras`, from [extras.md](extras.md)); an extra unavailable on this platform says so and has none. A section whose library does not import is one missing item, installable by its `host_extra` |
+| `missing_extras(config, sections=None)` | The host extras that install what is missing: the first carrier of each installable item |
 | `install(extras, on_output)` | Installs the host's extras with its installer; `InstallError` when the app cannot install (no lock, no uv). Sections whose library did not import are retried afterwards |
-| `prepare(config, on_progress)` | Each section with a preparable item missing: its contract's `prepare` |
+| `prepare(config, on_progress, sections=None)` | Each section with a preparable item missing: its contract's `prepare` |
 | `probe(config, section)` | The section's `probe` |
 | `options(config, section, name)` | The section's `options` |
 | `secret_variables(config)` | Each environment variable the config names for a key, with its source ([secrets.md](secrets.md)) and the pointers naming it |
-| `blockers(config)` | Why the config cannot run on this machine yet, in words: its problems, then every missing item; empty when it can. An `unknown` item does not block |
+| `blockers(config, sections=None)` | Why the config cannot run on this machine yet, in words: its problems, then every missing item; empty when it can. An `unknown` item does not block |
 | `used_config(config)` | The documents of the sections the config uses: what the app runs with |
+
+The checks take an optional `sections`: the Setup panel asks about one section at a time, so its Check, Install, Download and Test act on that section alone.
 
 A `SetupItem` is the contract's item with its `section` and `host_extras`; `installable` is true for a missing extra some host extra carries.
 
