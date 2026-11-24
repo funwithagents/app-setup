@@ -1,4 +1,5 @@
 import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -75,7 +76,10 @@ def test_setting_a_variable_writes_the_file_privately_and_loads_it(
 
     assert environ == {"API_KEY": "n3w", "OTHER": "x"}
     assert env_path.read_text() == 'API_KEY="n3w"\nOTHER="x"\n'
-    assert stat.S_IMODE(env_path.stat().st_mode) == 0o600
+    if sys.platform != "win32":
+        # Windows has no POSIX modes (chmod only sets read-only): the file is private
+        # through the user profile's access rules there.
+        assert stat.S_IMODE(env_path.stat().st_mode) == 0o600
 
 
 def test_setting_a_shell_variable_writes_the_file_but_the_shell_still_wins(

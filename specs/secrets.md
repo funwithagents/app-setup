@@ -29,7 +29,7 @@ Libraries read their keys from the environment, through variable names their con
 
 The usual dialect: `NAME=value` lines, an optional `export`, values plain (a ` #` starts a comment), `'single'` or `"double"` quoted (`\n`, `\"`, `\\` escapes in double quotes), blank lines and `#` comments skipped, a later line winning.
 
-Writing a variable replaces its line, or appends one, keeping every other line and comment; the value is always double-quoted and escaped, so it reads back the same. The file is made readable by its owner only (`0600`).
+Writing a variable replaces its line, or appends one, keeping every other line and comment; the value is always double-quoted and escaped, so it reads back the same. The file is made readable by its owner only (`0600`; Windows has no such modes, and the file is private there through the user profile's access rules).
 
 It is plain text. That is the first version's choice: simple, and the same file a developer already keeps. The OS keychain is an open question.
 
