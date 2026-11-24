@@ -49,4 +49,4 @@ A live test needs real credentials, and it must **skip — never fail** — when
 
 ## Open questions
 
-1. **CI wiring.** Nothing here sets up continuous integration. The default `tests/` tier is CI-ready (deterministic, no credentials), and the e2e tier is designed to skip cleanly when keys are absent — but actually running either on a hosted runner is unbuilt. Today all testing is a local, manual command.
+1. **CI wiring.** Settled in [ci.md](ci.md): both tiers run on GitHub's hosted runners for every pull request and push to `main`, the browser tests failing instead of skipping there.

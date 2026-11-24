@@ -1,4 +1,5 @@
 import json
+import os
 import stat
 import sys
 import textwrap
@@ -208,21 +209,28 @@ def test_a_requirement_no_extra_of_the_host_lists_has_no_carrier(app: Path) -> N
 
 
 def _fake_uv(folder: Path, exit_code: int = 0) -> Path:
-    """An executable that prints its working directory, environment and arguments."""
-    script = folder / "uv"
-    script.write_text(
-        textwrap.dedent(
-            f"""\
-            #!{sys.executable}
-            import os, sys
-            print("cwd=" + os.getcwd())
-            print("venv=" + os.environ.get("VIRTUAL_ENV", ""))
-            print("args=" + " ".join(sys.argv[1:]))
-            sys.exit({exit_code})
-            """
-        ),
-        encoding="utf-8",
+    """An executable named `uv` that prints its working directory, environment and
+    arguments: a script with a shebang, or on Windows (which runs no shebang) a `uv.cmd`
+    running the same Python, as `shutil.which("uv")` would find a real `uv.exe`."""
+    body = textwrap.dedent(
+        f"""\
+        import os, sys
+        print("cwd=" + os.getcwd())
+        print("venv=" + os.environ.get("VIRTUAL_ENV", ""))
+        print("args=" + " ".join(sys.argv[1:]))
+        sys.exit({exit_code})
+        """
     )
+    if sys.platform == "win32":
+        (folder / "uv-script.py").write_text(body, encoding="utf-8")
+        script = folder / "uv.cmd"
+        script.write_text(
+            f'@"{sys.executable}" "%~dp0uv-script.py" %*\r\n@exit /b %errorlevel%\r\n',
+            encoding="utf-8",
+        )
+        return script
+    script = folder / "uv"
+    script.write_text(f"#!{sys.executable}\n" + body, encoding="utf-8")
     script.chmod(script.stat().st_mode | stat.S_IXUSR)
     return script
 
@@ -249,7 +257,10 @@ def test_the_installer_is_found_from_the_host_s_install_record(
 
     installer = find_installer("talk-app")
 
-    assert installer == Installer(project_dir=project, uv=str(uv))
+    assert isinstance(installer, Installer)
+    assert installer.project_dir == project
+    # Windows paths compare without case (`which` may return `UV.CMD`).
+    assert os.path.normcase(installer.uv) == os.path.normcase(str(uv))
 
 
 def test_a_host_installed_from_an_index_cannot_install(site: Path) -> None:

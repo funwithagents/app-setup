@@ -1,9 +1,11 @@
 """The panels driven in a real (headless) browser: what gradio's client cannot reach.
 
-Opt-in, like the whole tier, and skipped without Playwright and its browser:
+Opt-in, like the whole tier, and skipped without Playwright and its browser
+(`MODULE_SETUP_E2E_REQUIRE_BROWSER=1`, as CI sets it, makes that a failure):
 
-    uv run --with playwright python -m playwright install chromium
-    uv run --with playwright pytest tests-e2e -rs
+    uv sync --group browser
+    uv run playwright install chromium
+    uv run pytest tests-e2e -rs
 """
 
 import json
@@ -16,8 +18,12 @@ from typing import Any
 
 import gradio as gr
 import pytest
+from support import no_browser  # pyright: ignore[reportMissingImports]
 
-sync_api = pytest.importorskip("playwright.sync_api")
+try:
+    from playwright import sync_api
+except ImportError:
+    no_browser("Playwright is not installed: uv sync --group browser")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tests"))
 
@@ -86,7 +92,7 @@ def browser() -> Iterator[object]:
         try:
             launched = playwright.chromium.launch()
         except Exception as exc:  # noqa: BLE001 - no browser downloaded: skip
-            pytest.skip(f"no Chromium for Playwright: {exc}")
+            no_browser(f"no Chromium for Playwright: {exc}")
         yield launched
         launched.close()
 
