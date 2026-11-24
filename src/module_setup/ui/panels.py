@@ -187,10 +187,8 @@ def setup_panel(model: AppModel) -> SetupPanel:
     revision = gr.State(0)
     saved = gr.State(0)
 
-    with gr.Row():
-        save = gr.Button("Save", variant="primary", scale=0)
-        revert = gr.Button("Revert to saved", scale=0)
-        reset = gr.Button("Reset to defaults", scale=0)
+    # The launch choice first, apart from the config it is not part of: Save, Revert and
+    # Reset below act on the config only.
     autostart = (
         gr.Checkbox(
             label="Start the session when the app launches",
@@ -201,6 +199,13 @@ def setup_panel(model: AppModel) -> SetupPanel:
         if model.app.autostart is not None
         else None
     )
+    launch_notice = gr.Markdown() if autostart is not None else None
+    if autostart is not None:
+        gr.Markdown("### Configuration")
+    with gr.Row():
+        save = gr.Button("Save", variant="primary", scale=0)
+        revert = gr.Button("Revert to saved", scale=0)
+        reset = gr.Button("Reset to defaults", scale=0)
     lock = gr.Markdown()
     notice = gr.Markdown()
     gr.Markdown(REQUIRED)
@@ -217,7 +222,7 @@ def setup_panel(model: AppModel) -> SetupPanel:
     # No trigger and no input: on page load only.
     gr.on(None, on_load, outputs=[draft, revision])
 
-    if autostart is not None:
+    if autostart is not None and launch_notice is not None:
 
         def on_launch_load() -> bool:
             return bool(model.autostart())
@@ -233,7 +238,7 @@ def setup_panel(model: AppModel) -> SetupPanel:
             )
 
         # `input`: the user's change only, not the value set on page load.
-        autostart.input(on_autostart, inputs=[autostart], outputs=[notice])
+        autostart.input(on_autostart, inputs=[autostart], outputs=[launch_notice])
 
     def on_redraw(config: Config) -> list[Any]:
         used = set(model.used(config))

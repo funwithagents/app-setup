@@ -238,6 +238,22 @@ def test_an_app_with_autostart_gets_its_checkbox_saved_at_once(tmp_path: Path) -
     assert model.autostart() is False
     assert not [b for b in without.blocks.values() if isinstance(b, gr.Checkbox)]
 
+    # The launch choice comes first, then a "Configuration" title over the buttons that
+    # act on the config only; an app without autostart has neither.
+    drawn = list(page.blocks.values())
+    save = next(b for b in drawn if isinstance(b, gr.Button) and b.value == "Save")
+    title = next(
+        b
+        for b in drawn
+        if isinstance(b, gr.Markdown) and b.value == "### Configuration"
+    )
+    assert drawn.index(checkbox) < drawn.index(title) < drawn.index(save)
+    assert not [
+        b
+        for b in without.blocks.values()
+        if isinstance(b, gr.Markdown) and b.value == "### Configuration"
+    ]
+
 
 def test_a_field_not_set_shows_its_default_greyed_and_a_set_one_its_value(
     tmp_path: Path,
