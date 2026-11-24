@@ -49,9 +49,9 @@ Serving the page, the command line, when to start a session (a setting of the ap
 
 **`setup_panel(model) -> SetupPanel`**
 
-- For an app with autostart, a **"Start the session when the app launches"** checkbox next to them, loaded from the folder's `launch.json` and saved at once, enabled while a session runs ([autostart.md](autostart.md)).
+- For an app with autostart, **first** a **"Start the session when the app launches"** checkbox, loaded from the folder's `launch.json` and saved at once, enabled while a session runs ([autostart.md](autostart.md)), then a **Configuration** title over the buttons below: the launch choice is not part of the config, and Save, Revert and Reset do not touch it.
 - **Save**, **Revert to saved**, **Reset to defaults**. Save and Reset are disabled, with a line saying a session is running, while the model is locked (`AppModel.locked`, polled every second).
-- A line saying that a field marked `*` must be filled in (the schema's `required`) and the others have a default (shown in the field's hover text) or can stay empty.
+- A line saying that a field marked `*` must be filled in (the schema's `required`) and the others have a default or can stay empty, and that a value in grey is a default: not set, not saved.
 - **One block per section**, in the app's order, shown while the config uses it (`when`): its title (the app's `Section(title=…)`, else its library's, never its key), its form, then **its own checks**, acting on that section alone: **Check** shows its problems and a table of what the machine is missing for it; **Install missing extras** installs the host extras that carry what it misses, streaming uv's output; **Download missing files** runs its `prepare`, streaming its progress; **Test** runs its `probe`. The output box appears with the first action. All four act on the form's current values, saved or not. A section is one library's contract, so what it needs is installed, downloaded and tested with it; Save, Revert and Reset stay for the whole config, one file and one draft, since sections can depend on each other (`when`).
 - The checks also run by themselves, for each section, each time the form's structure changes (the page loaded, a module switched, an optional object turned on or off, a choice from a list, revert, reset), and each section's output is cleared then: what was shown was about another config. A value typed does not run them; **Check** does.
 
@@ -79,11 +79,11 @@ Every browser tab has its own draft of the config; the saved config and the secr
 |---|---|---|
 | `FormGroup` | An object | Its title and description, its items, the advanced ones in a folded **Advanced** block; an optional object gets a **Configure …** switch (off: the key is absent, so the library's defaults apply or the feature is off, as the object's description says), and its items only when on |
 | `FormChoice` | A `oneOf` | A dropdown of the modules; the selected module's fields follow the common ones |
-| `FormField` | A field | A text box, a number (whole for an integer) showing the default when the key is absent, a checkbox, a dropdown for an `enum`, JSON text for an array. A number with neither a value nor a default is a text box, since a number box cannot be empty |
+| `FormField` | A field | A text box for text and numbers alike (a number read back as one, whole for an integer; its range in its hint, checked by **Check**), a checkbox, a dropdown for an `enum`, JSON text for an array |
 | `FormRaw` | A free-form object | JSON text |
 
 - A key written in the config itself (`x-secret`) is never drawn.
-- A field's description is its help text; its default is shown, not written.
+- A field's description is its help text. **One rule for defaults:** a field not set shows its default greyed (a text box's placeholder: the box itself is empty; a dropdown's "(default: …)" entry; a checkbox, which must show a state, says "Not set: the default applies" in its hint), and a value in white is one the user set, which is saved. A number is not drawn as a number box because one cannot be empty: it would show the default as a value that looks set.
 - **What an edit writes** (`coerce`): an empty widget, or a value equal to the field's default, removes the key, so the config holds only what differs from the library's own defaults. A number with no fraction is written as an integer; a field accepting several kinds takes a number when the text is one and the field accepts it. An invalid value (bad JSON, a fraction for an integer) is refused with a message, and the config is unchanged.
 - **Switching module** (`select_branch`) keeps the fields common to every module and drops the old module's own, even those the new module has under the same name (a voice id of one provider means nothing to another).
 - **A named list** (`x-options` on a module or a field) gets a button that loads `options` and a dropdown whose choice writes its fields.

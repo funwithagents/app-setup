@@ -47,10 +47,22 @@ def _label(field: FormField) -> str:
     return field.label + (" *" if field.required else "")
 
 
-def _info(description: str | None, default: str = "") -> str | None:
-    if default:
-        return f"{description or ''} (default: {default})".strip()
-    return description
+def _number_info(field: FormField) -> str | None:
+    """A field's description, with its range for a number (the box does not enforce it:
+    Check reports a value outside it)."""
+    spec = field.spec
+    if field.widget not in ("number", "integer"):
+        return spec.description
+    low, high = spec.minimum, spec.maximum
+    if low is not None and high is not None:
+        bounds = f"from {low:g} to {high:g}"
+    elif low is not None:
+        bounds = f"at least {low:g}"
+    elif high is not None:
+        bounds = f"at most {high:g}"
+    else:
+        return spec.description
+    return f"{spec.description or ''} ({bounds})".strip()
 
 
 def _field(field: FormField, full: Path, draft: gr.State) -> None:
@@ -63,25 +75,15 @@ def _field(field: FormField, full: Path, draft: gr.State) -> None:
 
     present = field.value is not ABSENT
     default = _default_text(field)
-    info = _info(field.spec.description, default)
     component: Any
     if field.widget == "checkbox":
+        # A checkbox shows one state: unset, the default's, said in its hint.
         value = field.value if present else bool(field.spec.default)
+        unset = f" Not set: the default ({'on' if value else 'off'}) applies."
         component = gr.Checkbox(
             value=value,
             label=_label(field),
-            info=field.spec.description,
-            interactive=True,
-        )
-    elif field.widget in ("number", "integer") and (present or field.spec.has_default):
-        # An absent number shows its default, which `coerce` writes back as absent.
-        component = gr.Number(
-            value=field.value if present else field.spec.default,
-            label=_label(field),
-            info=info,
-            precision=0 if field.widget == "integer" else None,
-            minimum=field.spec.minimum,
-            maximum=field.spec.maximum,
+            info=(field.spec.description or "") + ("" if present else unset),
             interactive=True,
         )
     elif field.widget == "dropdown":
@@ -111,16 +113,18 @@ def _field(field: FormField, full: Path, draft: gr.State) -> None:
         component.blur(write, inputs=[component, draft], outputs=[draft])
         return
     else:
-        # Text, and a number with no default and no value: a number box cannot be empty.
+        # Text and numbers alike: a field not set is empty, its default shown in grey (the
+        # placeholder), so grey means "not set, the library decides" and a value means "set,
+        # saved". A number box would always show a value. `coerce` reads the number back.
         component = gr.Textbox(
             value=str(field.value) if present and field.value is not None else "",
             label=_label(field),
-            info=field.spec.description,
+            info=_number_info(field),
             placeholder=default or ("a number" if field.widget != "text" else ""),
             interactive=True,
         )
     component.input(write, inputs=[component, draft], outputs=[draft])
-    if isinstance(component, gr.Textbox | gr.Number):
+    if isinstance(component, gr.Textbox):
         # Also on leaving the field: a value typed before the field's `input` listener is
         # attached (right after a redraw) still reaches the config.
         component.blur(write, inputs=[component, draft], outputs=[draft])

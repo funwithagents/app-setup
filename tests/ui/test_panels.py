@@ -237,3 +237,47 @@ def test_an_app_with_autostart_gets_its_checkbox_saved_at_once(tmp_path: Path) -
     assert note == "The session will not start when the app launches."
     assert model.autostart() is False
     assert not [b for b in without.blocks.values() if isinstance(b, gr.Checkbox)]
+
+    # The launch choice comes first, then a "Configuration" title over the buttons that
+    # act on the config only; an app without autostart has neither.
+    drawn = list(page.blocks.values())
+    save = next(b for b in drawn if isinstance(b, gr.Button) and b.value == "Save")
+    title = next(
+        b
+        for b in drawn
+        if isinstance(b, gr.Markdown) and b.value == "### Configuration"
+    )
+    assert drawn.index(checkbox) < drawn.index(title) < drawn.index(save)
+    assert not [
+        b
+        for b in without.blocks.values()
+        if isinstance(b, gr.Markdown) and b.value == "### Configuration"
+    ]
+
+
+def test_a_field_not_set_shows_its_default_greyed_and_a_set_one_its_value(
+    tmp_path: Path,
+) -> None:
+    model = _model(tmp_path)
+    unset = {"speech": {"module": {"type": "local-voice"}, "gate": {}}}
+    set_ = {
+        "speech": {
+            "module": {"type": "local-voice", "timeout": 3, "voice": "Bo"},
+            "gate": {"loud": True},
+        }
+    }
+
+    def drawn(config: dict[str, Any]) -> dict[str, Any]:
+        return {c.label: c for c in _drawn(model, config) if getattr(c, "label", None)}
+
+    empty, filled = drawn(unset), drawn(set_)
+
+    # A number not set is an empty box with its default greyed, like text: never a
+    # value that looks set. Its range is in its hint.
+    assert isinstance(empty["timeout"], gr.Textbox)
+    assert (empty["timeout"].value, empty["timeout"].placeholder) == ("", "10")
+    assert (empty["voice"].value, empty["voice"].placeholder) == ("", "Ada")
+    assert (filled["timeout"].value, filled["voice"].value) == ("3", "Bo")
+    # A checkbox shows one state: unset, its hint says the default applies.
+    assert "Not set: the default (off) applies." in empty["loud"].info
+    assert "Not set" not in filled["loud"].info
