@@ -104,12 +104,24 @@ def setup_panel(model: AppModel) -> SetupPanel:
     output = gr.Textbox(label="Output", lines=8, max_lines=20, interactive=False)
     timer = gr.Timer(1.0)
 
-    def on_load() -> tuple[Config, int, str, str]:
-        config = model.saved_config()
-        return (config, next(_loads), *_reports(model, config))
+    def on_load() -> tuple[Config, int]:
+        return model.saved_config(), next(_loads)
 
     # No trigger and no input: on page load only.
-    gr.on(None, on_load, outputs=[draft, revision, config_md, setup_md])
+    gr.on(None, on_load, outputs=[draft, revision])
+
+    def on_redraw(config: Config) -> tuple[str, str, str]:
+        return *_reports(model, config), ""
+
+    # Each change of structure (the page loaded, a module switched, an optional object
+    # turned on or off, a choice from a list, revert, reset) checks the new config again
+    # and clears the output: what was shown was about another config.
+    revision.change(
+        on_redraw,
+        inputs=[draft],
+        outputs=[config_md, setup_md, output],
+        show_progress="hidden",
+    )
 
     def on_save(config: Config, count: int) -> tuple[Any, ...]:
         try:

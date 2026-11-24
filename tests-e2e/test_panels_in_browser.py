@@ -109,6 +109,8 @@ def test_switching_module_typing_and_picking_from_a_list_are_saved(
 
     voice_id = _textbox(page, "voice_id *")
     voice_id.wait_for()
+    # The switch checked the new config without a click on Check.
+    page.get_by_text("voice_id is required").wait_for()
     voice_id.fill("v-42")
     voice_id.press("Tab")
     page.get_by_role("button", name="Save", exact=True).click()

@@ -176,7 +176,9 @@ def test_set_at_writes_creates_and_removes_without_touching_the_original() -> No
     assert get_at(original, ("tts", "nope")) is ABSENT
 
 
-def test_switching_module_keeps_the_shared_and_common_fields() -> None:
+def test_switching_module_drops_the_old_modules_fields_and_keeps_the_common_ones() -> (
+    None
+):
     module_choice = _items(_items(layout(SCHEMA, {"module": {}}))["module"])["<choice>"]
     document = {
         "tts": {
@@ -195,9 +197,9 @@ def test_switching_module_keeps_the_shared_and_common_fields() -> None:
         document, ("tts", "module"), module_choice.choice, "local-voice"
     )
 
+    # `speed` is a field of both modules, yet the old module's value is not carried over.
     assert switched["tts"]["module"] == {
         "type": "local-voice",
-        "speed": 1.1,
         "timeout": 5,
         "unknown": True,
     }

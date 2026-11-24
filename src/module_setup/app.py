@@ -126,6 +126,28 @@ class _Loaded:
         return self.contract
 
 
+def _extra_item(requirement: str) -> dict[str, Any]:
+    """A `check_setup` item for *requirement*, from the installed packages' metadata alone:
+    for a section whose config the library cannot be asked about yet."""
+    state = requirement_status(requirement)
+    if state.state == "installed":
+        return {
+            "id": f"extra:{requirement}",
+            "title": requirement,
+            "status": "ready",
+            "detail": "Installed.",
+            "preparable": False,
+        }
+    return {
+        "id": f"extra:{requirement}",
+        "title": requirement,
+        # "unavailable" is told apart by `_item`, which reads the same metadata.
+        "status": "missing" if state.state in ("missing", "unavailable") else "unknown",
+        "detail": state.detail,
+        "preparable": False,
+    }
+
+
 class AppModel:
     """The app's state and actions, shared by every browser tab on the page.
 
@@ -245,7 +267,11 @@ class AppModel:
     def check_setup(self, config: Mapping[str, Any]) -> list[SetupItem]:
         """What this machine is missing for every section the config uses: each section's
         `check_setup` items, an extra's item told which of the host's extras installs it. A
-        section whose document has problems is skipped: it is asked once it is right."""
+        section whose document has problems is not asked (the contract asks `check_setup`
+        only about a config `check_config` accepts): its extras are read instead from its
+        `required_extras`, which takes an incomplete config, and the installed packages'
+        metadata, so what it needs can be installed while the config is being fixed (a
+        voice list that needs the extra, for one)."""
         found: list[SetupItem] = []
         for name in self.used(config):
             section = self.section(name)
@@ -267,11 +293,13 @@ class AppModel:
                 )
                 continue
             document = config.get(name)
-            if not isinstance(document, Mapping) or contract.check_config(
-                copy.deepcopy(dict(document))
-            ):
-                # The contract asks `check_setup` only about a config `check_config`
-                # accepts; the config's problems are reported by `check_config`.
+            if not isinstance(document, Mapping):
+                continue  # reported by check_config
+            if contract.check_config(copy.deepcopy(dict(document))):
+                for requirement in contract.required_extras(
+                    copy.deepcopy(dict(document))
+                ):
+                    found.append(self._item(name, _extra_item(requirement)))
                 continue
             for item in contract.check_setup(copy.deepcopy(dict(document))):
                 found.append(self._item(name, item))

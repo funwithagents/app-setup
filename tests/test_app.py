@@ -144,6 +144,37 @@ def test_a_section_with_problems_is_not_asked_what_the_machine_needs(
     assert model.blockers(unfinished)
 
 
+def test_a_section_with_problems_still_says_which_extra_to_install(
+    tmp_path: Path, lib: SpeechLib, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The voice id is missing, and the voice list that would fill it needs the extra:
+    # the extra must be installable before the config is right.
+    lib.check_setup = None  # type: ignore[assignment] - never asked
+    model = _model(tmp_path, lib)
+    unfinished = {"speech": {"module": {"type": "cloud-voice"}}}
+
+    [item] = model.check_setup(unfinished)
+
+    assert (item.id, item.status, item.host_extras) == (
+        "extra:speech-lib[cloud-voice]",
+        "missing",
+        ("speech-cloud",),
+    )
+    assert model.missing_extras(unfinished) == ["speech-cloud"]
+    assert model.blockers(unfinished) == [
+        "/speech/module/voice_id: voice_id is required",
+        f"speech: speech-lib[cloud-voice] — {item.detail}",
+    ]
+
+    monkeypatch.setattr(
+        app_module,
+        "requirement_status",
+        lambda requirement: RequirementStatus(requirement, "installed"),
+    )
+    [installed] = model.check_setup(unfinished)
+    assert (installed.status, installed.installable) == ("ready", False)
+
+
 def test_files_are_prepared_then_ready(tmp_path: Path, lib: SpeechLib) -> None:
     model = _model(tmp_path, lib)
     progress: list[dict[str, Any]] = []

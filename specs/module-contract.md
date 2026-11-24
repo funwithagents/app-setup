@@ -155,7 +155,7 @@ A module choice is an object schema with a `oneOf`, each branch being one module
 
 - The **discriminator** is the one property that is a `const` in every branch, with a different scalar value in each. module-setup finds it; it is not named separately, and it is declared in the branches only. Every branch has a `title`.
 - The object's own `properties` hold the fields common to every branch; a branch adds its own, under names the common ones do not use. This is how WICA's flat `agent` object is described: `model`, `system_prompt_file` and the rest are common, `provider` discriminates, `base_url` and `hf_provider` sit in their provider's branch.
-- The form draws a dropdown of the branch titles and, under it, the selected branch's fields. Switching branch keeps the values of fields the two branches share by name and drops the others.
+- The form draws a dropdown of the branch titles and, under it, the selected branch's fields. Switching branch keeps the values of the fields common to every branch and drops the old branch's own, even those the new branch has under the same name: a voice id of one provider means nothing to another.
 
 A `oneOf` in any other shape is refused.
 

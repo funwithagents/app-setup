@@ -51,7 +51,7 @@ Serving the page, the command line, when to start a session (a setting of the ap
 
 - **Save**, **Revert to saved**, **Reset to defaults**. Save and Reset are disabled, with a line saying a session is running, while the model is locked (`AppModel.locked`, polled every second).
 - **The form**: one group per section the config uses.
-- **Checks**: **Check** shows the config's problems and a table of what the machine is missing; **Install missing extras** installs the host extras that carry them, streaming uv's output; **Download missing files** runs `prepare`, streaming its progress; **Test** runs one section's `probe`. All four act on the form's current values, saved or not.
+- **Checks**: **Check** shows the config's problems and a table of what the machine is missing; **Install missing extras** installs the host extras that carry them, streaming uv's output; **Download missing files** runs `prepare`, streaming its progress; **Test** runs one section's `probe`. All four act on the form's current values, saved or not. The checks also run by themselves each time the form's structure changes (the page loaded, a module switched, an optional object turned on or off, a choice from a list, revert, reset), and the output is cleared then: what was shown was about another config. A value typed does not run them; **Check** does.
 
 It returns what the app can listen to:
 
@@ -78,7 +78,7 @@ Every browser tab has its own draft of the config; the saved config and the secr
 - A key written in the config itself (`x-secret`) is never drawn.
 - A field's description is its help text; its default is shown, not written.
 - **What an edit writes** (`coerce`): an empty widget, or a value equal to the field's default, removes the key, so the config holds only what differs from the library's own defaults. A number with no fraction is written as an integer; a field accepting several kinds takes a number when the text is one and the field accepts it. An invalid value (bad JSON, a fraction for an integer) is refused with a message, and the config is unchanged.
-- **Switching module** (`select_branch`) keeps the fields common to every module and those the two modules share by name, and drops the old module's own.
+- **Switching module** (`select_branch`) keeps the fields common to every module and drops the old module's own, even those the new module has under the same name (a voice id of one provider means nothing to another).
 - **A named list** (`x-options` on a module or a field) gets a button that loads `options` and a dropdown whose choice writes its fields.
 
 A change of structure (a module switched, an optional object turned on or off, a choice from a list, revert, reset) draws the form again; a value edit does not, so typing never loses focus. Choosing the module already selected, or switching an object to the state it is in, draws nothing. The module dropdown listens to `select`, which fires once per choice (`input` fires twice, and each redraw replaces the fields). A text or number field writes on `input` and again on `blur`, so a value typed right after a redraw, before the field's listeners are attached, still reaches the config. Every form component is explicitly interactive: gradio does not infer it for components drawn inside `gr.render`. Each section's problems are not drawn on the fields: **Check** lists them with their pointers.
