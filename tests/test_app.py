@@ -369,3 +369,21 @@ def test_the_checks_can_be_asked_about_some_sections_only(
     )
     assert model.blockers(config, ["backup"])[0].startswith("/backup/module/voice_id")
     assert model.check_config(config) == model.check_config(config, ["backup"])
+
+
+def test_the_library_is_told_the_app_s_folder_for_relative_paths(
+    tmp_path: Path, lib: SpeechLib
+) -> None:
+    model = _model(tmp_path, lib)
+
+    model.check_setup(DEFAULTS)
+    model.prepare(DEFAULTS)
+    model.options(DEFAULTS, "speech", "voices")
+    model.probe(DEFAULTS, "speech")
+
+    assert lib.base_dirs == {
+        "check_setup": str(tmp_path),
+        "prepare": str(tmp_path),
+        "options": str(tmp_path),
+        "probe": str(tmp_path),
+    }

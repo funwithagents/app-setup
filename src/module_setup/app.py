@@ -216,6 +216,11 @@ class AppModel:
         ]
 
     @property
+    def _base_dir(self) -> str:
+        """What a section's relative paths are relative to, handed to its library."""
+        return str(self.folder.path)
+
+    @property
     def path(self) -> Path:
         """The app's folder: where a section's relative paths resolve."""
         return self.folder.path
@@ -329,7 +334,9 @@ class AppModel:
                 ):
                     found.append(self._item(name, _extra_item(requirement)))
                 continue
-            for item in contract.check_setup(copy.deepcopy(dict(document))):
+            for item in contract.check_setup(
+                copy.deepcopy(dict(document)), base_dir=self._base_dir
+            ):
                 found.append(self._item(name, item))
         return found
 
@@ -423,7 +430,11 @@ class AppModel:
                 continue
             contract = self.contract(name)
             if contract is not None:
-                contract.prepare(copy.deepcopy(dict(config[name])), on_progress)
+                contract.prepare(
+                    copy.deepcopy(dict(config[name])),
+                    on_progress,
+                    base_dir=self._base_dir,
+                )
 
     def probe(self, config: Mapping[str, Any], name: str) -> dict[str, Any]:
         contract = self.contract(name)
@@ -433,7 +444,9 @@ class AppModel:
                 "message": self.unavailable(name) or "Not installed.",
                 "duration_s": 0.0,
             }
-        return contract.probe(copy.deepcopy(dict(config.get(name) or {})))
+        return contract.probe(
+            copy.deepcopy(dict(config.get(name) or {})), base_dir=self._base_dir
+        )
 
     def options(
         self, config: Mapping[str, Any], name: str, list_name: str
@@ -441,7 +454,11 @@ class AppModel:
         contract = self.contract(name)
         if contract is None:
             return []
-        return contract.options(list_name, copy.deepcopy(dict(config.get(name) or {})))
+        return contract.options(
+            list_name,
+            copy.deepcopy(dict(config.get(name) or {})),
+            base_dir=self._base_dir,
+        )
 
     # --- Secrets.
 

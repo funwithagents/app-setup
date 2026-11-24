@@ -10,6 +10,7 @@ runs in its own tests.
 from __future__ import annotations
 
 import copy
+import inspect
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from importlib import metadata
@@ -98,17 +99,28 @@ class SetupContract(Protocol):
 
     def check_config(self, config: dict[str, Any]) -> list[dict[str, Any]]: ...
 
-    def check_setup(self, config: dict[str, Any]) -> list[dict[str, Any]]: ...
+    # The four that may look at the machine take `base_dir`: the folder a relative path of
+    # the config is relative to (the app's folder), None for the working directory.
+
+    def check_setup(
+        self, config: dict[str, Any], *, base_dir: str | None = None
+    ) -> list[dict[str, Any]]: ...
 
     def prepare(
         self,
         config: dict[str, Any],
         on_progress: Callable[[dict[str, Any]], None] | None = None,
+        *,
+        base_dir: str | None = None,
     ) -> None: ...
 
-    def options(self, name: str, config: dict[str, Any]) -> list[dict[str, Any]]: ...
+    def options(
+        self, name: str, config: dict[str, Any], *, base_dir: str | None = None
+    ) -> list[dict[str, Any]]: ...
 
-    def probe(self, config: dict[str, Any]) -> dict[str, Any]: ...
+    def probe(
+        self, config: dict[str, Any], *, base_dir: str | None = None
+    ) -> dict[str, Any]: ...
 
 
 @dataclass(frozen=True)
@@ -540,6 +552,20 @@ def _with_defaults(
     return filled
 
 
+# The functions that may look at the machine, so resolve a config's relative paths.
+_TAKES_BASE_DIR = ("check_setup", "prepare", "options", "probe")
+
+
+def _takes_base_dir(function: Callable[..., Any]) -> bool:
+    try:
+        parameters = inspect.signature(function).parameters
+    except (TypeError, ValueError):
+        return True  # no signature to read (a builtin): trust it
+    return "base_dir" in parameters or any(
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values()
+    )
+
+
 def check_contract(
     contract: SetupContract,
     examples: Sequence[dict[str, Any]],
@@ -559,6 +585,14 @@ def check_contract(
     ]
     if absent:
         raise ContractViolation(f"the contract object lacks {absent}")
+    deaf = [
+        name for name in _TAKES_BASE_DIR if not _takes_base_dir(getattr(contract, name))
+    ]
+    if deaf:
+        raise ContractViolation(
+            f"{deaf} take no `base_dir` keyword: the folder a relative path of the config "
+            "is relative to"
+        )
     try:
         raw = contract.config_schema()
         description = parse_description(raw)
