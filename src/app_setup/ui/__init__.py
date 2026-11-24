@@ -13,6 +13,6 @@ with gr.Blocks() as page:
 
 from __future__ import annotations
 
-from module_setup.ui.panels import SetupPanel, secrets_panel, setup_panel
+from app_setup.ui.panels import SetupPanel, secrets_panel, setup_panel
 
 __all__ = ["SetupPanel", "secrets_panel", "setup_panel"]

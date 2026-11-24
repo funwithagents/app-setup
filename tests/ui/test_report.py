@@ -1,6 +1,6 @@
-from module_setup.app import Problem, SetupItem
-from module_setup.secrets import SecretVariable
-from module_setup.ui.report import (
+from app_setup.app import Problem, SetupItem
+from app_setup.secrets import SecretVariable
+from app_setup.ui.report import (
     config_report,
     env_file_rows,
     secrets_report,

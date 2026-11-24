@@ -1,6 +1,6 @@
 ---
 code:
-  - src/module_setup/folder.py
+  - src/app_setup/folder.py
 tests:
   - tests/test_folder.py
 ---
@@ -21,7 +21,7 @@ An app runs from a folder, not from a config file. The folder holds what the Set
 | `.env` | The secrets ([secrets.md](secrets.md)) |
 | `launch.json` | Whether the app starts its session at launch, for an app with autostart (`{"autostart": bool}`), written once the user chooses ([autostart.md](autostart.md)); apart from the config, so the config stays the app's own sections |
 
-The app may keep files of its own in the folder (its settings, such as whether to start a session at launch); module-setup never reads, writes or removes them.
+The app may keep files of its own in the folder (its settings, such as whether to start a session at launch); app-setup never reads, writes or removes them.
 
 The app's **default config** is not a file of the folder: it is part of the app (`App.default_config`). On first launch, `ensure()` creates the folder and writes the default as `config.json`; a config already there is left alone. Building the `AppModel` calls it ([app.md](app.md)). "Reset to defaults" writes the default back as the current config.
 
@@ -57,4 +57,4 @@ The folder does not validate the config: an invalid config can be saved, and the
 ## Open questions
 
 1. **Several configs per app** (profiles) are not supported: one folder is one config. Running the app with another `--folder` is the way to keep two.
-2. **Relative paths in a section** (a voice file) resolve against the folder: module-setup passes it to the library's setup functions as `base_dir` ([module-contract.md](module-contract.md), "Relative paths"), and the app gives it to the library's loader when it builds its runtime (`AppModel.path`).
+2. **Relative paths in a section** (a voice file) resolve against the folder: app-setup passes it to the library's setup functions as `base_dir` ([module-contract.md](module-contract.md), "Relative paths"), and the app gives it to the library's loader when it builds its runtime (`AppModel.path`).

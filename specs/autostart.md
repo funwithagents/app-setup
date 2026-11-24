@@ -1,9 +1,9 @@
 ---
 code:
-  - src/module_setup/autostart.py
-  - src/module_setup/app.py
-  - src/module_setup/folder.py
-  - src/module_setup/ui/panels.py
+  - src/app_setup/autostart.py
+  - src/app_setup/app.py
+  - src/app_setup/folder.py
+  - src/app_setup/ui/panels.py
 tests:
   - tests/test_autostart.py
   - tests/ui/test_panels.py
@@ -15,7 +15,7 @@ tests:
 
 ## Purpose
 
-Some apps start their session as soon as they launch: a robot's app started at boot, a demo that used to connect before its page opened. They keep doing so, the same way in every app built on module-setup, and the user can turn it off, or force it for one launch.
+Some apps start their session as soon as they launch: a robot's app started at boot, a demo that used to connect before its page opened. They keep doing so, the same way in every app built on app-setup, and the user can turn it off, or force it for one launch.
 
 ## Decided
 
@@ -49,4 +49,4 @@ def starts_at_launch(model: AppModel, flag: bool | None) -> bool: ...
 
 ## Open questions
 
-1. **A first version kept the choice in the config,** as a section module-setup provided (`autostart_section`). Dropped before release: apps that build a typed object from their config would have had to accept a section they never use, and an app wanting its own `app` section could collide with it.
+1. **A first version kept the choice in the config,** as a section app-setup provided (`autostart_section`). Dropped before release: apps that build a typed object from their config would have had to accept a section they never use, and an app wanting its own `app` section could collide with it.

@@ -15,11 +15,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from module_setup.contract import Description, SetupContract, parse_description
-from module_setup.extras import find_installer, host_extras, requirement_status
-from module_setup.folder import ConfigFolder
-from module_setup.form import pointer, secret_variables
-from module_setup.secrets import SecretStore, SecretVariable
+from app_setup.contract import Description, SetupContract, parse_description
+from app_setup.extras import find_installer, host_extras, requirement_status
+from app_setup.folder import ConfigFolder
+from app_setup.form import pointer, secret_variables
+from app_setup.secrets import SecretStore, SecretVariable
 
 __all__ = [
     "App",

@@ -1,7 +1,7 @@
 """The panels driven in a real (headless) browser: what gradio's client cannot reach.
 
 Opt-in, like the whole tier, and skipped without Playwright and its browser
-(`MODULE_SETUP_E2E_REQUIRE_BROWSER=1`, as CI sets it, makes that a failure):
+(`APP_SETUP_E2E_REQUIRE_BROWSER=1`, as CI sets it, makes that a failure):
 
     uv sync --group browser
     uv run playwright install chromium
@@ -29,10 +29,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tests"))
 
 from fakes import SpeechLib  # pyright: ignore[reportMissingImports]
 
-from module_setup.app import App, AppModel, Section
-from module_setup.folder import ConfigFolder
-from module_setup.secrets import SecretStore
-from module_setup.ui import secrets_panel, setup_panel
+from app_setup.app import App, AppModel, Section
+from app_setup.folder import ConfigFolder
+from app_setup.secrets import SecretStore
+from app_setup.ui import secrets_panel, setup_panel
 
 DEFAULTS = {"speech": {"module": {"type": "local-voice"}}}
 
@@ -62,7 +62,7 @@ def served(tmp_path: Path) -> Iterator[Served]:
     """An app's own page: its tab first, then the two panels in tabs of its own."""
     app = App(
         name="browser",
-        host="module-setup",
+        host="app-setup",
         sections=(Section("speech", SpeechLib()),),
         default_config=DEFAULTS,
     )

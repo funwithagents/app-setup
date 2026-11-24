@@ -17,9 +17,9 @@ from typing import Any
 
 import gradio as gr
 
-from module_setup.app import AppModel, InstallError
-from module_setup.ui.form import render_section, section_title
-from module_setup.ui.report import (
+from app_setup.app import AppModel, InstallError
+from app_setup.ui.form import render_section, section_title
+from app_setup.ui.report import (
     config_report,
     env_file_rows,
     secrets_report,
@@ -67,7 +67,7 @@ def _streamed(work: Callable[[Callable[[str], None]], None]) -> Iterator[str]:
         finally:
             lines.put(None)
 
-    threading.Thread(target=run, name="module-setup-action", daemon=True).start()
+    threading.Thread(target=run, name="app-setup-action", daemon=True).start()
     while (line := lines.get()) is not None:
         text.append(line)
         yield "\n".join(text)

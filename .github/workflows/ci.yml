@@ -86,5 +86,5 @@ jobs:
         # A missing Playwright or Chromium fails here instead of skipping: the tests
         # cannot pass by not running (specs/ci.md).
         env:
-          MODULE_SETUP_E2E_REQUIRE_BROWSER: "1"
+          APP_SETUP_E2E_REQUIRE_BROWSER: "1"
         run: uv run pytest tests-e2e -rs --durations=5

@@ -1,4 +1,4 @@
-# module-setup
+# app-setup
 
 The Setup side of an app built from configurable libraries: choose a module, edit its config in a form, install the extra it needs, prepare what it needs on the machine, set its keys, then run it — without editing JSON by hand or restarting the app.
 
@@ -11,10 +11,10 @@ import argparse
 
 import gradio as gr
 
-from module_setup.app import App, AppModel, Section
-from module_setup.autostart import add_start_arguments, starts_at_launch
-from module_setup.folder import ConfigFolder, default_folder
-from module_setup.ui import secrets_panel, setup_panel
+from app_setup.app import App, AppModel, Section
+from app_setup.autostart import add_start_arguments, starts_at_launch
+from app_setup.folder import ConfigFolder, default_folder
+from app_setup.ui import secrets_panel, setup_panel
 
 import speech_lib.setup  # a library implementing the contract
 

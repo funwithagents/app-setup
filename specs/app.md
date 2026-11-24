@@ -1,6 +1,6 @@
 ---
 code:
-  - src/module_setup/app.py
+  - src/app_setup/app.py
 tests:
   - tests/test_app.py
   - tests/fakes.py
@@ -14,7 +14,7 @@ tests:
 
 An app built from configurable libraries declares what it is made of, and gets a Setup panel and a Secrets panel for it. This spec is that declaration and the model behind the panels: what an app gives, and what the panels can do with it, with no UI. The panels are in [ui.md](ui.md); the folder and the secrets each have their own spec.
 
-Running the app with its config (a session: Start, Stop, the app's own controls) is the app's own. module-setup only needs to know when the config is in use, to refuse changing it then.
+Running the app with its config (a session: Start, Stop, the app's own controls) is the app's own. app-setup only needs to know when the config is in use, to refuse changing it then.
 
 ## What an app declares
 

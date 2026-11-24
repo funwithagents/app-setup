@@ -7,11 +7,11 @@ from typing import Any
 import pytest
 from fakes import SpeechLib
 
-from module_setup import app as app_module
-from module_setup.app import App, AppModel, InstallError, Problem, Section
-from module_setup.extras import RequirementStatus
-from module_setup.folder import ConfigFolder
-from module_setup.secrets import SecretStore, SecretVariable
+from app_setup import app as app_module
+from app_setup.app import App, AppModel, InstallError, Problem, Section
+from app_setup.extras import RequirementStatus
+from app_setup.folder import ConfigFolder
+from app_setup.secrets import SecretStore, SecretVariable
 
 DEFAULTS = {"speech": {"module": {"type": "local-voice"}}}
 

@@ -1,9 +1,9 @@
 ---
 code:
-  - src/module_setup/form.py
-  - src/module_setup/ui/form.py
-  - src/module_setup/ui/panels.py
-  - src/module_setup/ui/report.py
+  - src/app_setup/form.py
+  - src/app_setup/ui/form.py
+  - src/app_setup/ui/panels.py
+  - src/app_setup/ui/report.py
 tests:
   - tests/test_form.py
   - tests/ui/test_panels.py
@@ -24,9 +24,9 @@ Two panels an app draws in its own page: a **Setup** panel to edit, check and in
 ```python
 import gradio as gr
 
-from module_setup.app import AppModel
-from module_setup.folder import ConfigFolder, default_folder
-from module_setup.ui import secrets_panel, setup_panel
+from app_setup.app import AppModel
+from app_setup.folder import ConfigFolder, default_folder
+from app_setup.ui import secrets_panel, setup_panel
 
 model = AppModel(APP, ConfigFolder(default_folder(APP.name), APP.default_config), locked=session.running)
 
@@ -73,7 +73,7 @@ Every browser tab has its own draft of the config; the saved config and the secr
 
 ## The form
 
-`module_setup.form` turns a section's parsed schema and document into a tree of items, with no gradio:
+`app_setup.form` turns a section's parsed schema and document into a tree of items, with no gradio:
 
 | Item | From | Drawn as |
 |---|---|---|
@@ -92,7 +92,7 @@ A change of structure (a module switched, an optional object turned on or off, a
 
 ## Reports
 
-`module_setup.ui.report` writes the model's answers as Markdown: the problems with their pointers, the setup table (section, item, status, detail, and what to do: the host extra to install, or "Prepare downloads it"), and the secrets table.
+`app_setup.ui.report` writes the model's answers as Markdown: the problems with their pointers, the setup table (section, item, status, detail, and what to do: the host extra to install, or "Prepare downloads it"), and the secrets table.
 
 ## Testing
 

@@ -11,31 +11,31 @@ Where things live. This is a coarse, module-level map — for the full file inve
 | Path | What's there |
 |---|---|
 | `README.md` | What the project is and where to start |
-| `src/module_setup/` | The library itself — one module per core concept (see below) |
+| `src/app_setup/` | The library itself — one module per core concept (see below) |
 | `specs/` | Pre-implementation design docs, one per concept, each with a `**Status:**` — indexed by [specs/_index.md](specs/_index.md) |
 | `plans/` | Implementation plans turning settled specs into buildable steps — indexed by [plans/_index.md](plans/_index.md) |
-| `tests/` | Fast, deterministic, no-network tests; mirrors the `src/module_setup/` module structure (`tests/ui/` for the panels); `fakes.py` is a small library implementing the contract |
+| `tests/` | Fast, deterministic, no-network tests; mirrors the `src/app_setup/` module structure (`tests/ui/` for the panels); `fakes.py` is a small library implementing the contract |
 | `tests-e2e/` | Opt-in live tests (not collected by default `pytest`): the panels driven in a headless browser (`uv sync --group browser`, `uv run playwright install chromium`, then `uv run pytest tests-e2e -rs`) |
 | `.github/workflows/` | The CI workflow: lint, format and types, the fast tier on Linux, macOS and Windows, and the browser tests, on every pull request and push to `main` ([specs/ci.md](specs/ci.md)) |
 
-### `src/module_setup/` modules
+### `src/app_setup/` modules
 
 <!-- One row per concept module. Keep this in sync with the code (a test enforces it). -->
 
 | Module | Role | Spec |
 |---|---|---|
-| [app.py](src/module_setup/app.py) | `App` and `Section` (what an app declares), `AppModel` (what its panels do, no gradio): check, install, prepare, probe, secrets, blockers, the config locked while the app's session runs | [app.md](specs/app.md) |
-| [folder.py](src/module_setup/folder.py) | `ConfigFolder`: the current config and the `.env` path; the default config on first launch | [config-folder.md](specs/config-folder.md) |
-| [secrets.py](src/module_setup/secrets.py) | `SecretStore`: the `.env` dialect, loading it under the shell's variables, writing a key, each variable's source | [secrets.md](specs/secrets.md) |
-| [form.py](src/module_setup/form.py) | The form as data: a schema and a document to items, and each edit as a pure function (coerce, switch module, toggle) | [ui.md](specs/ui.md) |
-| [ui/form.py](src/module_setup/ui/form.py) | The form drawn with gradio, inside the Setup panel's `gr.render` | [ui.md](specs/ui.md) |
-| [ui/panels.py](src/module_setup/ui/panels.py) | `setup_panel` and `secrets_panel`: each drawn where an app calls it, with its own state, events and page-load step | [ui.md](specs/ui.md) |
-| [ui/report.py](src/module_setup/ui/report.py) | The reports as Markdown: problems, setup table, secrets | [ui.md](specs/ui.md) |
-| [extras.py](src/module_setup/extras.py) | Requirements against the installed environment, read from package metadata without importing anything: `requirement_status` (installed, missing, unavailable on this platform), `host_extras` (which extra of the host carries a library's requirement), `find_installer` / `Installer` (add extras from the host's lock with uv) | [extras.md](specs/extras.md) |
-| [autostart.py](src/module_setup/autostart.py) | Whether an app starts its session at launch: `add_start_arguments` (`--start` / `--no-start`) and `starts_at_launch` (the flag, else the folder's `launch.json`, else `App.autostart`) | [autostart.md](specs/autostart.md) |
-| [contract.py](src/module_setup/contract.py) | The module contract from the consuming side: the `SetupContract` protocol, `parse_description` (a `describe()` result into the frozen objects a form is drawn from, refusing what is outside the spec), `check_contract` (the conformance check a library runs in its tests) | [module-contract.md](specs/module-contract.md) |
+| [app.py](src/app_setup/app.py) | `App` and `Section` (what an app declares), `AppModel` (what its panels do, no gradio): check, install, prepare, probe, secrets, blockers, the config locked while the app's session runs | [app.md](specs/app.md) |
+| [folder.py](src/app_setup/folder.py) | `ConfigFolder`: the current config and the `.env` path; the default config on first launch | [config-folder.md](specs/config-folder.md) |
+| [secrets.py](src/app_setup/secrets.py) | `SecretStore`: the `.env` dialect, loading it under the shell's variables, writing a key, each variable's source | [secrets.md](specs/secrets.md) |
+| [form.py](src/app_setup/form.py) | The form as data: a schema and a document to items, and each edit as a pure function (coerce, switch module, toggle) | [ui.md](specs/ui.md) |
+| [ui/form.py](src/app_setup/ui/form.py) | The form drawn with gradio, inside the Setup panel's `gr.render` | [ui.md](specs/ui.md) |
+| [ui/panels.py](src/app_setup/ui/panels.py) | `setup_panel` and `secrets_panel`: each drawn where an app calls it, with its own state, events and page-load step | [ui.md](specs/ui.md) |
+| [ui/report.py](src/app_setup/ui/report.py) | The reports as Markdown: problems, setup table, secrets | [ui.md](specs/ui.md) |
+| [extras.py](src/app_setup/extras.py) | Requirements against the installed environment, read from package metadata without importing anything: `requirement_status` (installed, missing, unavailable on this platform), `host_extras` (which extra of the host carries a library's requirement), `find_installer` / `Installer` (add extras from the host's lock with uv) | [extras.md](specs/extras.md) |
+| [autostart.py](src/app_setup/autostart.py) | Whether an app starts its session at launch: `add_start_arguments` (`--start` / `--no-start`) and `starts_at_launch` (the flag, else the folder's `launch.json`, else `App.autostart`) | [autostart.md](specs/autostart.md) |
+| [contract.py](src/app_setup/contract.py) | The module contract from the consuming side: the `SetupContract` protocol, `parse_description` (a `describe()` result into the frozen objects a form is drawn from, refusing what is outside the spec), `check_contract` (the conformance check a library runs in its tests) | [module-contract.md](specs/module-contract.md) |
 
-**Keep this map current:** when you add, rename, or remove a top-level `src/module_setup/` module or a root directory, update the map in the same change — same discipline as keeping spec/plan statuses honest (below). A test (`tests/test_project_map.py`) enforces that every `src/module_setup/*.py` module appears here and vice-versa — and that the spec frontmatter (see below) stays honest too.
+**Keep this map current:** when you add, rename, or remove a top-level `src/app_setup/` module or a root directory, update the map in the same change — same discipline as keeping spec/plan statuses honest (below). A test (`tests/test_project_map.py`) enforces that every `src/app_setup/*.py` module appears here and vice-versa — and that the spec frontmatter (see below) stays honest too.
 
 ## Keeping statuses current
 
@@ -56,7 +56,7 @@ Every spec opens with a YAML frontmatter block naming the code and tests it gove
 ```
 ---
 code:
-  - src/module_setup/<module>.py
+  - src/app_setup/<module>.py
 tests:
   - tests/test_<module>.py
 ---
@@ -66,7 +66,7 @@ This is the **spec → code/tests** mapping — the inverse of the module → sp
 
 The mapping is **many-to-many**: a file can be governed by several specs, so the same path legitimately appears in more than one spec's frontmatter.
 
-**Keep it current** (same discipline as statuses): when you move, rename, or delete a file a spec governs — or add a new `src/module_setup/` module — update the affected spec's `code:`/`tests:` in the same change. `tests/test_project_map.py` enforces three invariants: every path an `Implemented` spec lists exists (a spec not yet implemented may name the files it will govern), every spec declares a non-empty `code:` list, and every concept module in `src/module_setup/` is named by at least one spec (`__init__.py` is exempt as package glue).
+**Keep it current** (same discipline as statuses): when you move, rename, or delete a file a spec governs — or add a new `src/app_setup/` module — update the affected spec's `code:`/`tests:` in the same change. `tests/test_project_map.py` enforces three invariants: every path an `Implemented` spec lists exists (a spec not yet implemented may name the files it will govern), every spec declares a non-empty `code:` list, and every concept module in `src/app_setup/` is named by at least one spec (`__init__.py` is exempt as package glue).
 
 ## Testing
 

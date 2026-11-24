@@ -1,6 +1,6 @@
 ---
 code:
-  - src/module_setup/example.py
+  - src/app_setup/example.py
 tests:
   - tests/test_example.py
 ---

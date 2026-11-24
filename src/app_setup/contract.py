@@ -212,7 +212,7 @@ def parse_description(data: Any) -> Description:
     if version != CONTRACT_VERSION or isinstance(version, bool):
         raise ContractError(
             f"/contract: unknown contract version {version!r}, "
-            f"this module-setup knows {CONTRACT_VERSION}"
+            f"this app-setup knows {CONTRACT_VERSION}"
         )
     distribution = _text(data, "distribution", "")
     title = _text(data, "title", "")

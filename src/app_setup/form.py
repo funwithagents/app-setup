@@ -16,7 +16,7 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from module_setup.contract import Choice, FieldSpec, ObjectSpec
+from app_setup.contract import Choice, FieldSpec, ObjectSpec
 
 __all__ = [
     "ABSENT",

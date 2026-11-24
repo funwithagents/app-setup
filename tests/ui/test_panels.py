@@ -6,12 +6,12 @@ import gradio as gr
 from fakes import SpeechLib
 from gradio.components import Component
 
-from module_setup.app import App, AppModel, Section
-from module_setup.folder import ConfigFolder
-from module_setup.secrets import SecretStore
-from module_setup.ui import secrets_panel, setup_panel
-from module_setup.ui.form import render_section, section_title
-from module_setup.ui.panels import LOCKED
+from app_setup.app import App, AppModel, Section
+from app_setup.folder import ConfigFolder
+from app_setup.secrets import SecretStore
+from app_setup.ui import secrets_panel, setup_panel
+from app_setup.ui.form import render_section, section_title
+from app_setup.ui.panels import LOCKED
 
 DEFAULTS = {"speech": {"module": {"type": "local-voice"}}}
 

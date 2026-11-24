@@ -21,7 +21,7 @@ def require_env(name: str) -> str:
 
 # Set to "1" where the browser must be there (CI): a missing Playwright or Chromium then
 # fails instead of skipping, so the browser tests cannot pass by not running.
-REQUIRE_BROWSER = "MODULE_SETUP_E2E_REQUIRE_BROWSER"
+REQUIRE_BROWSER = "APP_SETUP_E2E_REQUIRE_BROWSER"
 
 
 def no_browser(reason: str) -> NoReturn:

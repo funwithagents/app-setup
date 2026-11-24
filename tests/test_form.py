@@ -3,8 +3,8 @@ from typing import Any
 import pytest
 from fakes import schema
 
-from module_setup.contract import FieldSpec, parse_description
-from module_setup.form import (
+from app_setup.contract import FieldSpec, parse_description
+from app_setup.form import (
     ABSENT,
     FormChoice,
     FormField,
