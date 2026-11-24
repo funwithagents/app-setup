@@ -71,10 +71,17 @@ def format_env(name: str, value: str) -> str:
 
 @dataclass(frozen=True)
 class SecretVariable:
-    """A variable the config names, and where its value comes from."""
+    """A variable the config names, and where its value comes from. *in_file* says the
+    folder's ``.env`` sets it too: unused when the shell's value wins."""
 
     name: str
     source: Source
+    in_file: bool = False
+
+    @property
+    def shadowed(self) -> bool:
+        """The ``.env`` sets it, but the shell's value is the one in use."""
+        return self.source == "shell" and self.in_file
 
 
 class SecretStore:
@@ -121,10 +128,17 @@ class SecretStore:
         return "missing"
 
     def variables(self, names: Iterable[str]) -> list[SecretVariable]:
-        """Each of *names* once, in order, with its source."""
+        """Each of *names* once, in order, with its source and whether the file sets it
+        too."""
+        file = self._file()
         return [
-            SecretVariable(name, self.source(name)) for name in dict.fromkeys(names)
+            SecretVariable(name, self.source(name), in_file=bool(file.get(name)))
+            for name in dict.fromkeys(names)
         ]
+
+    def file_names(self) -> list[str]:
+        """The variables the folder's ``.env`` sets, in the file's order; names only."""
+        return [name for name, value in self._file().items() if value]
 
     def _rewrite(self, name: str, line: str | None) -> None:
         try:

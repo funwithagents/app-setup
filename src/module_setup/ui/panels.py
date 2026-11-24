@@ -258,7 +258,10 @@ def secrets_panel(model: AppModel, config: gr.State | None = None) -> None:
 
     def report(*values: Config) -> str:
         current = values[0] if values else model.saved_config()
-        return secrets_report(model.secret_variables(current))
+        variables = model.secret_variables(current)
+        named = {variable.name for variable, _ in variables}
+        others = [name for name in model.secrets.file_names() if name not in named]
+        return secrets_report(variables, others)
 
     # On page load, and on each change of the config it follows.
     gr.on(None, report, inputs=inputs, outputs=[secrets_md], show_progress="hidden")
@@ -271,7 +274,8 @@ def secrets_panel(model: AppModel, config: gr.State | None = None) -> None:
         except ValueError as exc:
             return f"⚠️ {exc}", gr.skip(), value
         note = (
-            f"✅ `{name}` saved. The shell's value still wins."
+            f"✅ `{name}` saved in the .env, but the shell's value is the one used: "
+            "unset it in your shell profile to use this one."
             if source == "shell"
             else f"✅ `{name}` saved."
         )

@@ -150,3 +150,20 @@ def test_the_secrets_panel_reads_the_config_it_follows_else_the_saved_one(
     assert "names no environment variable" in _handler(alone, "report")()
     model.save(cloud)
     assert "`CLOUD_VOICE_KEY`" in _handler(alone, "report")()
+
+
+def test_the_secrets_panel_lists_the_env_file_s_other_variables_by_name(
+    tmp_path: Path,
+) -> None:
+    model = _model(tmp_path)
+    cloud = {"speech": {"module": {"type": "cloud-voice", "voice_id": "v"}}}
+    model.secrets.set("CLOUD_VOICE_KEY", "s3cret-one")
+    model.secrets.set("OLD_KEY", "s3cret-two")
+    with gr.Blocks() as page:
+        secrets_panel(model, gr.State(cloud))
+
+    text = _handler(page, "report")(cloud)
+
+    assert "| `CLOUD_VOICE_KEY` | ✅ the folder's .env |" in text
+    assert "not named by the current config: `OLD_KEY`." in text
+    assert "s3cret" not in text  # names only, never a value

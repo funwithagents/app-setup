@@ -59,13 +59,36 @@ def setup_report(items: Sequence[SetupItem]) -> str:
     return "\n".join(lines)
 
 
-def secrets_report(variables: Sequence[tuple[SecretVariable, Sequence[str]]]) -> str:
+SHADOWED = "✅ the shell (the folder's .env also sets it, unused)"
+
+
+def secrets_report(
+    variables: Sequence[tuple[SecretVariable, Sequence[str]]],
+    others: Sequence[str] = (),
+) -> str:
+    """The variables the config names, each with where its value comes from; then the
+    other variables the folder's ``.env`` sets (*others*), by name."""
     if not variables:
-        return "The current config names no environment variable for a key."
-    lines = ["| Variable | Value from | Named by |", "|---|---|---|"]
-    for variable, pointers in variables:
-        lines.append(
-            f"| `{variable.name}` | {_SOURCE[variable.source]} "
-            f"| {', '.join(f'`{p}`' for p in pointers)} |"
+        parts = ["The current config names no environment variable for a key."]
+    else:
+        lines = ["| Variable | Value from | Named by |", "|---|---|---|"]
+        for variable, pointers in variables:
+            source = SHADOWED if variable.shadowed else _SOURCE[variable.source]
+            lines.append(
+                f"| `{variable.name}` | {source} "
+                f"| {', '.join(f'`{p}`' for p in pointers)} |"
+            )
+        parts = ["\n".join(lines)]
+        if any(variable.shadowed for variable, _ in variables):
+            parts.append(
+                "A variable set in the shell the app was started from wins over the "
+                ".env. To use the .env's value, unset it in your shell profile (and "
+                "start the app again), or remove it from the .env."
+            )
+    if others:
+        parts.append(
+            "**Also in the folder's .env**, not named by the current config: "
+            + ", ".join(f"`{name}`" for name in others)
+            + "."
         )
-    return "\n".join(lines)
+    return "\n\n".join(parts)

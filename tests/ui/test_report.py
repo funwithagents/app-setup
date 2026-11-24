@@ -68,3 +68,17 @@ def test_the_secrets_table_names_each_source() -> None:
     assert "| `A` | ✅ the shell | `/s/module/api_key_env` |" in text
     assert "| `B` | ❌ not set | `/s/x`, `/t/y` |" in text
     assert "names no environment variable" in secrets_report([])
+
+
+def test_a_value_the_shell_shadows_and_the_file_s_other_variables_are_said() -> None:
+    text = secrets_report(
+        [(SecretVariable("A", "shell", in_file=True), ["/s/module/api_key_env"])],
+        others=["OLD_KEY", "OTHER"],
+    )
+
+    assert "| `A` | ✅ the shell (the folder's .env also sets it, unused) |" in text
+    assert "unset it in your shell profile" in text
+    assert "**Also in the folder's .env**, not named by the current config: " in text
+    assert "`OLD_KEY`, `OTHER`." in text
+    # With no variable named, the file's variables are still listed.
+    assert "`OLD_KEY`" in secrets_report([], others=["OLD_KEY"])
