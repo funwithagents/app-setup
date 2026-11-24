@@ -444,6 +444,21 @@ def test_the_config_cannot_change_while_the_app_locks_it(
     assert not _model(tmp_path, lib).locked()  # no lock given: never locked
 
 
+def test_a_draft_is_unsaved_until_it_is_saved(tmp_path: Path, lib: SpeechLib) -> None:
+    model = _model(tmp_path, lib)
+    cloud = {"speech": {"module": {"type": "cloud-voice", "voice_id": "v"}}}
+    # A change outside the sections the config uses still has to be saved.
+    unused = {**DEFAULTS, "backup": {"module": {"type": "cloud-voice"}}}
+
+    assert not model.unsaved(DEFAULTS)
+    assert model.unsaved(cloud)
+    assert model.unsaved(unused)
+
+    model.save(cloud)
+    assert not model.unsaved(cloud)
+    assert model.unsaved(DEFAULTS)
+
+
 def test_probe_and_options_reach_the_section_s_contract(
     tmp_path: Path, lib: SpeechLib
 ) -> None:

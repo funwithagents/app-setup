@@ -3,7 +3,8 @@
 Each panel is drawn where it is called, inside the app's own ``gr.Blocks`` (a tab, a column,
 an accordion), and brings its own state and events: the app decides what it shows and where.
 The config being edited (the draft) lives in each browser tab; the saved config and the
-secrets are the ``AppModel``'s, shared by every tab.
+secrets are the ``AppModel``'s, shared by every tab. A section's actions try the draft; a
+session uses the saved config: the Setup panel says so, and says when the two differ.
 """
 
 from __future__ import annotations
@@ -29,14 +30,27 @@ from app_setup.ui.report import (
     setup_summary,
 )
 
-__all__ = ["SetupPanel", "secrets_panel", "setup_panel"]
+__all__ = ["SetupPanel", "secrets_panel", "setup_panel", "unsaved_notice"]
 
 Config = dict[str, Any]
+
+# Every `gr.render` here runs one at a time (`concurrency_limit=1`): two runs of one render
+# at once (two of its triggers fired together, a Check and a timer's re-check) unregister
+# each other's listeners, and a button drawn by one then calls a function the server forgot.
 
 # A fresh value for a panel's revision on each page load: its form is drawn when it changes.
 _loads = itertools.count(1)
 
 LOCKED = "🔒 A session is running: stop it to change the config."
+
+# Which config the buttons use: the sections' try the draft, a session the saved one.
+DRAFT = (
+    "Check, Install, Prepare and Test try the config as it is in the form. "
+    "Save it for a session to use it."
+)
+UNSAVED_TOP = "✏️ Unsaved changes — Save is at the bottom."
+UNSAVED_BOTTOM = "✏️ Unsaved changes."
+UNSAVED_SESSION = "The Setup tab has unsaved changes: Start uses the saved config."
 
 # What a field's mark means: a field with a default shows it in its hover text instead.
 REQUIRED = (
@@ -44,6 +58,13 @@ REQUIRED = (
     "A value in grey is the default: not set, so the library's own applies, and not "
     "saved. Only what you set is saved."
 )
+
+
+def unsaved_notice(model: AppModel, draft: Config) -> str:
+    """For the app's own session view, given a Setup panel's ``draft``: a line saying the
+    draft has unsaved changes and Start uses the saved config, or "" (nothing to say, or
+    the panel not loaded yet: its draft still empty)."""
+    return UNSAVED_SESSION if draft and model.unsaved(draft) else ""
 
 
 @dataclass(frozen=True)
@@ -175,6 +196,11 @@ class _Section:
     # The section's problems, its summary and its items for the rows, for a config.
     reports: Callable[[Config], tuple[str, str, tuple[int, list[SetupItem]]]]
 
+    @property
+    def checks(self) -> tuple[gr.Markdown, gr.Markdown, gr.State]:
+        """What a check of the section updates: its problems, its summary, its rows."""
+        return self.config_md, self.summary_md, self.checked
+
 
 def _section_block(
     model: AppModel,
@@ -198,13 +224,16 @@ def _section_block(
             (next(checks), items),
         )
 
+    # Bumped by each field of the section the user is done with: checked again then.
+    edited = gr.State(0)
+
     # A panel-styled column, not a `gr.Group`: inside a group, gradio draws buttons flat.
     with gr.Column(variant="panel") as block:
         gr.Markdown(f"### {section_title(model, name)}")
 
-        @gr.render(inputs=[draft], triggers=[revision.change])
+        @gr.render(inputs=[draft], triggers=[revision.change], concurrency_limit=1)
         def form(config: Config) -> None:
-            render_section(model, name, config, draft, revision)
+            render_section(model, name, config, draft, revision, edited)
 
         with gr.Row():
             check = gr.Button("Check", scale=0)
@@ -215,7 +244,7 @@ def _section_block(
         summary_md = gr.Markdown()
         checked = gr.State((0, []))
 
-        @gr.render(inputs=[checked], triggers=[checked.change])
+        @gr.render(inputs=[checked], triggers=[checked.change], concurrency_limit=1)
         def rows(state: tuple[int, list[SetupItem]]) -> None:
             _, items = state
             lines: list[gr.Markdown] = []
@@ -312,6 +341,18 @@ def _section_block(
 
     prepare_all.click(on_prepare_all, inputs=[draft], show_progress="hidden")
 
+    def on_edited(config: Config) -> tuple[Any, ...]:
+        return reports(config)
+
+    # A field finished: the section checked again, as if Check were clicked (a key's
+    # variable renamed, a voice typed), without its output box (Check's own).
+    edited.change(
+        on_edited,
+        inputs=[draft],
+        outputs=[config_md, summary_md, checked],
+        show_progress="hidden",
+    )
+
     def on_probe(config: Config) -> Any:
         result = model.probe(config, name)
         mark = "✅" if result.get("ok") else "❌"
@@ -329,16 +370,20 @@ def _section_block(
 
 
 def setup_panel(model: AppModel) -> SetupPanel:
-    """Draw the Setup panel of *model*'s app here: Save, Revert and Reset for the whole
-    config, then one block per section the config uses: its form, its own checks (Check,
-    Install, Prepare all, Test) acting on it alone, and a row per item it needs, each with
-    its own Prepare and progress."""
+    """Draw the Setup panel of *model*'s app here: for an app with autostart, its launch
+    choice, saved at once; then the config: one block per section the config uses (its
+    form, its own checks — Check, Install, Prepare all, Test — trying the draft, a row per
+    item it needs), and at the bottom Save, Revert and Reset for the whole config, a line
+    saying when the draft differs from the saved config at the top and next to Save."""
     draft = gr.State({})
     revision = gr.State(0)
     saved = gr.State(0)
+    # The last `SecretStore.revision` this tab saw: when it changes (a key saved or
+    # removed, from any tab), the sections are checked again.
+    secrets_seen = gr.State(None)
 
     # The launch choice first, apart from the config it is not part of: Save, Revert and
-    # Reset below act on the config only.
+    # Reset act on the config only.
     autostart = (
         gr.Checkbox(
             label="Start the session when the app launches",
@@ -350,15 +395,10 @@ def setup_panel(model: AppModel) -> SetupPanel:
         else None
     )
     launch_notice = gr.Markdown() if autostart is not None else None
-    if autostart is not None:
-        gr.Markdown("### Configuration")
-    with gr.Row():
-        save = gr.Button("Save", variant="primary", scale=0)
-        revert = gr.Button("Revert to saved", scale=0)
-        reset = gr.Button("Reset to defaults", scale=0)
-    lock = gr.Markdown()
-    notice = gr.Markdown()
+    gr.Markdown("### Configuration")
+    gr.Markdown(DRAFT)
     gr.Markdown(REQUIRED)
+    unsaved_top = gr.Markdown()
 
     # The item rows' progress, on a timer of their own: sharing the lock line's timer
     # stopped the lock line updating in the browser.
@@ -368,13 +408,28 @@ def setup_panel(model: AppModel) -> SetupPanel:
         _section_block(model, section.name, draft, revision, preparations, rows_timer)
         for section in model.app.sections
     ]
+
+    # The config is kept last, after the sections it is tried in.
+    unsaved_bottom = gr.Markdown()
+    with gr.Row():
+        save = gr.Button("Save", variant="primary", scale=0)
+        revert = gr.Button("Revert to saved", scale=0)
+        reset = gr.Button("Reset to defaults", scale=0)
+    lock = gr.Markdown()
+    notice = gr.Markdown()
     timer = gr.Timer(1.0)
 
-    def on_load() -> tuple[Config, int]:
-        return model.saved_config(), next(_loads)
+    def unsaved_lines(config: Config, rev: int) -> tuple[str, str]:
+        """Both unsaved lines; none before the page load drew the draft."""
+        if rev and model.unsaved(config):
+            return UNSAVED_TOP, UNSAVED_BOTTOM
+        return "", ""
+
+    def on_load() -> tuple[Config, int, int]:
+        return model.saved_config(), next(_loads), model.secrets.revision
 
     # No trigger and no input: on page load only.
-    gr.on(None, on_load, outputs=[draft, revision])
+    gr.on(None, on_load, outputs=[draft, revision, secrets_seen])
 
     if autostart is not None and launch_notice is not None:
 
@@ -417,58 +472,111 @@ def setup_panel(model: AppModel) -> SetupPanel:
         outputs=[
             component
             for section in sections
-            for component in (
-                section.block,
-                section.config_md,
-                section.summary_md,
-                section.checked,
-                section.output,
-            )
+            for component in (section.block, *section.checks, section.output)
         ],
         show_progress="hidden",
     )
 
-    def on_save(config: Config, count: int) -> tuple[Any, ...]:
+    def on_draft(config: Config, rev: int) -> tuple[str, str]:
+        return unsaved_lines(config, rev)
+
+    # Each change of the draft, a value typed included: compared with the saved file.
+    draft.change(
+        on_draft,
+        inputs=[draft, revision],
+        outputs=[unsaved_top, unsaved_bottom],
+        show_progress="hidden",
+    )
+
+    def on_save(config: Config, count: int, rev: int) -> tuple[Any, ...]:
         try:
             model.save(config)
         except RuntimeError as exc:
-            return f"⚠️ {exc}", gr.skip()
-        return "✅ Saved.", count + 1
+            return f"⚠️ {exc}", gr.skip(), *unsaved_lines(config, rev)
+        return "✅ Saved.", count + 1, *unsaved_lines(config, rev)
 
-    save.click(on_save, inputs=[draft, saved], outputs=[notice, saved])
+    save.click(
+        on_save,
+        inputs=[draft, saved, revision],
+        outputs=[notice, saved, unsaved_top, unsaved_bottom],
+    )
 
-    def on_revert(rev: int) -> tuple[Config, int, str]:
-        return model.saved_config(), rev + 1, "Reverted to the saved config."
+    def on_revert(rev: int) -> tuple[Any, ...]:
+        config = model.saved_config()
+        return (
+            config,
+            rev + 1,
+            "Reverted to the saved config.",
+            *unsaved_lines(config, rev + 1),
+        )
 
-    revert.click(on_revert, inputs=[revision], outputs=[draft, revision, notice])
+    revert.click(
+        on_revert,
+        inputs=[revision],
+        outputs=[draft, revision, notice, unsaved_top, unsaved_bottom],
+    )
 
-    def on_reset(rev: int, count: int) -> tuple[Any, ...]:
+    def on_reset(config: Config, rev: int, count: int) -> tuple[Any, ...]:
         try:
             config = model.reset()
         except RuntimeError as exc:
-            return gr.skip(), gr.skip(), gr.skip(), f"⚠️ {exc}"
+            return (
+                gr.skip(),
+                gr.skip(),
+                gr.skip(),
+                f"⚠️ {exc}",
+                *unsaved_lines(config, rev),
+            )
         return (
             config,
             rev + 1,
             count + 1,
             "Reset to the app's default config, and saved.",
+            *unsaved_lines(config, rev + 1),
         )
 
     reset.click(
         on_reset,
-        inputs=[revision, saved],
-        outputs=[draft, revision, saved, notice],
+        inputs=[draft, revision, saved],
+        outputs=[draft, revision, saved, notice, unsaved_top, unsaved_bottom],
     )
 
-    def on_tick() -> tuple[str, Any, Any]:
+    def on_tick(config: Config, rev: int, seen: int | None) -> list[Any]:
+        """Every second: the lock (Save and Reset with it), the unsaved lines (another tab
+        may have saved), and, when a key was saved or removed since this tab last looked,
+        the checks of the sections the config uses."""
         locked = model.locked()
-        return (
+        updates: list[Any] = [
             LOCKED if locked else "",
             gr.update(interactive=not locked),
             gr.update(interactive=not locked),
-        )
+            *unsaved_lines(config, rev),
+        ]
+        current = model.secrets.revision
+        changed = rev and seen is not None and seen != current
+        used = set(model.used(config)) if changed else set()
+        updates.append(current if changed or seen is None else gr.skip())
+        for section in sections:
+            if section.name in used:
+                updates += section.reports(config)
+            else:
+                updates += [gr.skip()] * len(section.checks)
+        return updates
 
-    timer.tick(on_tick, outputs=[lock, save, reset], show_progress="hidden")
+    timer.tick(
+        on_tick,
+        inputs=[draft, revision, secrets_seen],
+        outputs=[
+            lock,
+            save,
+            reset,
+            unsaved_top,
+            unsaved_bottom,
+            secrets_seen,
+            *(component for section in sections for component in section.checks),
+        ],
+        show_progress="hidden",
+    )
 
     return SetupPanel(draft=draft, saved=saved)
 
@@ -520,6 +628,7 @@ def secrets_panel(model: AppModel, config: gr.State | None = None) -> None:
             env_revision.change,
             *([config.change] if config is not None else []),
         ],
+        concurrency_limit=1,
     )
     def env_file(revision: int, *values: Config) -> None:
         rows = file_rows(values)

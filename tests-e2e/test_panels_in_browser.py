@@ -9,6 +9,7 @@ Opt-in, like the whole tier, and skipped without Playwright and its browser
 """
 
 import json
+import os
 import re
 import socket
 import sys
@@ -59,8 +60,12 @@ class Served:
 
 
 @pytest.fixture
-def served(tmp_path: Path) -> Iterator[Served]:
-    """An app's own page: its tab first, then the two panels in tabs of its own."""
+def served(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Served]:
+    """An app's own page: its tab first, then the two panels in tabs of its own. The
+    process environment is a copy, without the fake library's key: the store writes the
+    keys there and the library reads them from there."""
+    environ = {k: v for k, v in os.environ.items() if k != "CLOUD_VOICE_KEY"}
+    monkeypatch.setattr(os, "environ", environ)
     lib = SpeechLib()
     app = App(
         name="browser",
@@ -72,7 +77,7 @@ def served(tmp_path: Path) -> Iterator[Served]:
     port = _free_port()
     served = Served(f"http://127.0.0.1:{port}/", folder, lib)
     model = AppModel(
-        app, folder, SecretStore(folder.env_path, {}), lambda: served.running
+        app, folder, SecretStore(folder.env_path, environ), lambda: served.running
     )
     with gr.Blocks() as page:
         with gr.Tab("Talk"):
@@ -204,3 +209,54 @@ def test_one_item_is_prepared_from_its_row_with_its_progress(
     assert lib.lexicon and lib.started == ["lexicon"]
     voice.get_by_text("Not prepared yet").wait_for()  # the other row left as it was
     assert voice.get_by_role("button", name="Prepare").is_enabled()
+
+
+def test_a_value_typed_is_unsaved_until_it_is_saved(
+    served: Served, browser: object
+) -> None:
+    page = _open_setup(served, browser)
+    speed = _textbox(page, "speed")
+    speed.wait_for()
+    page.get_by_text(
+        "Check, Install, Prepare and Test try the config as it is in the form."
+    ).wait_for()
+    unsaved = page.get_by_text("Unsaved changes")
+    assert unsaved.count() == 0
+
+    speed.press_sequentially("1.5")  # keys typed: `fill` sends no keystroke
+    # At the top and next to Save, as soon as typed: before the field is left.
+    page.get_by_text("Unsaved changes — Save is at the bottom.").wait_for()
+    page.get_by_text(re.compile(r"Unsaved changes\.$")).wait_for()
+
+    page.get_by_role("button", name="Save", exact=True).click()
+    page.get_by_text("Saved.").wait_for()
+    unsaved.first.wait_for(state="hidden")
+    assert unsaved.count() == 0
+    assert json.loads(served.folder.config_path.read_text()) == {
+        "speech": {"module": {"type": "local-voice", "speed": 1.5}}
+    }
+
+
+def test_a_key_saved_in_the_keys_tab_turns_its_row_ready_without_check(
+    served: Served, browser: object
+) -> None:
+    page = _open_setup(served, browser)
+    _textbox(page, "speed").wait_for()
+    page.get_by_label("Voice", exact=True).click()
+    page.get_by_role("option", name="Cloud voice (hosted)").click()
+    voice_id = _textbox(page, "voice_id *")
+    voice_id.wait_for()
+    voice_id.fill("v-42")
+    voice_id.press("Tab")  # the field left: its section checked again
+    key_row = page.locator(".row").filter(has_text=re.compile(r"CLOUD_VOICE_KEY"))
+    key_row.filter(has_text="Missing").last.wait_for()
+
+    page.get_by_role("tab", name="Keys").click()
+    _textbox(page, "Variable").fill("CLOUD_VOICE_KEY")
+    page.locator("input[type=password]").fill("s3cret")
+    page.get_by_role("button", name="Save to the folder's .env").click()
+    page.get_by_text("CLOUD_VOICE_KEY saved.").wait_for()
+
+    page.get_by_role("tab", name="Setup").click()
+    key_row.filter(has_text="Ready").last.wait_for()  # no click on Check
+    page.get_by_text("This machine is ready for this config.").wait_for()

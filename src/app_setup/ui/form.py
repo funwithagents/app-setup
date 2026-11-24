@@ -4,7 +4,8 @@ Called inside the Setup panel's ``gr.render``: each section's ``FormGroup`` (app
 becomes components whose events write to the page's draft config. A change of structure (a
 module switched, an optional object turned on or off, a voice chosen from a list) also bumps
 the page's revision, which draws the form again; a plain value edit does not, so typing never
-loses focus.
+loses focus. A field finished (a text box left or Enter pressed, a box ticked, a value chosen)
+also bumps its section's ``edited`` state, which checks that section again.
 """
 
 from __future__ import annotations
@@ -65,7 +66,34 @@ def _number_info(field: FormField) -> str | None:
     return f"{spec.description or ''} ({bounds})".strip()
 
 
-def _field(field: FormField, full: Path, draft: gr.State) -> None:
+def _finished(
+    component: Any,
+    events: list[str],
+    write: Any,
+    draft: gr.State,
+    edited: gr.State | None,
+) -> None:
+    """On each of *events* (the user done with the field), write the value and, given the
+    section's *edited* state, bump it: the section is checked again."""
+    if edited is None:
+        for event in events:
+            getattr(component, event)(write, inputs=[component, draft], outputs=[draft])
+        return
+
+    def on_field_done(raw: Any, config: Config, count: int) -> tuple[Config, int]:
+        return write(raw, config), count + 1
+
+    for event in events:
+        getattr(component, event)(
+            on_field_done,
+            inputs=[component, draft, edited],
+            outputs=[draft, edited],
+        )
+
+
+def _field(
+    field: FormField, full: Path, draft: gr.State, edited: gr.State | None
+) -> None:
     def write(raw: Any, config: Config) -> Config:
         value, error = coerce(field, raw)
         if error is not None:
@@ -101,7 +129,8 @@ def _field(field: FormField, full: Path, draft: gr.State) -> None:
         def write_choice(raw: Any, config: Config) -> Config:
             return write(values.get(raw, "") if raw else "", config)
 
-        component.input(write_choice, inputs=[component, draft], outputs=[draft])
+        # A value chosen is a field finished.
+        _finished(component, ["input"], write_choice, draft, edited)
         return
     elif field.widget == "json":
         component = gr.Code(
@@ -110,7 +139,7 @@ def _field(field: FormField, full: Path, draft: gr.State) -> None:
             label=_label(field) + " — " + (field.spec.description or ""),
             interactive=True,
         )
-        component.blur(write, inputs=[component, draft], outputs=[draft])
+        _finished(component, ["blur"], write, draft, edited)
         return
     else:
         # Text and numbers alike: a field not set is empty, its default shown in grey (the
@@ -123,14 +152,19 @@ def _field(field: FormField, full: Path, draft: gr.State) -> None:
             placeholder=default or ("a number" if field.widget != "text" else ""),
             interactive=True,
         )
+    if isinstance(component, gr.Checkbox):
+        # A box ticked is a field finished.
+        _finished(component, ["input"], write, draft, edited)
+        return
+    # Each keystroke writes the value, without checking (a check may import a provider).
     component.input(write, inputs=[component, draft], outputs=[draft])
-    if isinstance(component, gr.Textbox):
-        # Also on leaving the field: a value typed before the field's `input` listener is
-        # attached (right after a redraw) still reaches the config.
-        component.blur(write, inputs=[component, draft], outputs=[draft])
+    # Leaving the field, or Enter, writes it again and checks the section: a value typed
+    # before the field's `input` listener is attached (right after a redraw) still reaches
+    # the config.
+    _finished(component, ["blur", "submit"], write, draft, edited)
 
 
-def _raw(item: FormRaw, full: Path, draft: gr.State) -> None:
+def _raw(item: FormRaw, full: Path, draft: gr.State, edited: gr.State | None) -> None:
     present = item.value is not ABSENT
     component = gr.Code(
         value=json.dumps(item.value, indent=2) if present else "",
@@ -146,7 +180,7 @@ def _raw(item: FormRaw, full: Path, draft: gr.State) -> None:
             return config
         return set_at(config, full, value)
 
-    component.blur(write, inputs=[component, draft], outputs=[draft])
+    _finished(component, ["blur"], write, draft, edited)
 
 
 def _options_picker(
@@ -205,15 +239,16 @@ def _item(
     item: FormItem,
     draft: gr.State,
     revision: gr.State,
+    edited: gr.State | None,
 ) -> None:
     if isinstance(item, FormField):
-        _field(item, (section, *item.path), draft)
+        _field(item, (section, *item.path), draft, edited)
     elif isinstance(item, FormRaw):
-        _raw(item, (section, *item.path), draft)
+        _raw(item, (section, *item.path), draft, edited)
     elif isinstance(item, FormChoice):
         _choice(model, section, item, draft, revision)
     else:
-        _group(model, section, item, draft, revision)
+        _group(model, section, item, draft, revision, edited)
 
 
 def _choice(
@@ -251,7 +286,12 @@ def _choice(
 
 
 def _group(
-    model: AppModel, section: str, group: FormGroup, draft: gr.State, revision: gr.State
+    model: AppModel,
+    section: str,
+    group: FormGroup,
+    draft: gr.State,
+    revision: gr.State,
+    edited: gr.State | None,
 ) -> None:
     full = (section, *group.path)
     if group.path:
@@ -281,7 +321,7 @@ def _group(
     main = [i for i in group.items if not _advanced(i)]
     advanced = [i for i in group.items if _advanced(i)]
     for item in main:
-        _item(model, section, item, draft, revision)
+        _item(model, section, item, draft, revision, edited)
     if group.options_list and not any(isinstance(i, FormChoice) for i in group.items):
         _options_picker(model, section, group.options_list, group.path, draft, revision)
     if advanced:
@@ -291,7 +331,7 @@ def _group(
         )
         with gr.Accordion(label, open=False):
             for item in advanced:
-                _item(model, section, item, draft, revision)
+                _item(model, section, item, draft, revision, edited)
 
 
 def _advanced(item: FormItem) -> bool:
@@ -306,10 +346,16 @@ def section_title(model: AppModel, name: str) -> str:
 
 
 def render_section(
-    model: AppModel, name: str, config: Config, draft: gr.State, revision: gr.State
+    model: AppModel,
+    name: str,
+    config: Config,
+    draft: gr.State,
+    revision: gr.State,
+    edited: gr.State | None = None,
 ) -> None:
     """Draw the form of section *name* of *config*: its fields, from its library's
-    schema; or why it cannot be drawn yet (its library not installed)."""
+    schema; or why it cannot be drawn yet (its library not installed). Given *edited*
+    (a counter), each field finished bumps it: the panel checks the section again."""
     section = model.section(name)
     description = model.description(name)
     if description is None:
@@ -326,4 +372,5 @@ def render_section(
         layout(description.schema, document if document is not ABSENT else {}),
         draft,
         revision,
+        edited,
     )

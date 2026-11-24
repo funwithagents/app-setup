@@ -113,7 +113,7 @@ A change of structure (a module switched, an optional object turned on or off, a
 
 ## Reports
 
-`app_setup.ui.report` writes the model's answers as Markdown: the problems with their pointers, each item row's state, detail and what to do (the wording above), a preparation's progress line, and the secrets table. The rows themselves, with their buttons and progress, are drawn by `app_setup.ui.panels`, inside a `gr.render` per section redrawn on each Check.
+`app_setup.ui.report` writes the model's answers as Markdown: the problems with their pointers, each item row's state, detail and what to do (the wording above), a preparation's progress line, and the secrets table. The rows themselves, with their buttons and progress, are drawn by `app_setup.ui.panels`, inside a `gr.render` per section redrawn on each Check. Every `gr.render` of the panels runs one at a time (`concurrency_limit=1`): two runs of one render at once (two of its triggers firing together, a Check and the timer's re-check) unregister each other's listeners, and a button drawn by one then calls a function the server no longer knows (found by the browser tests, one run in five).
 
 ## Testing
 

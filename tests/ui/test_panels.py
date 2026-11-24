@@ -1,3 +1,4 @@
+import os
 import threading
 import time
 from collections.abc import Callable
@@ -5,21 +6,33 @@ from pathlib import Path
 from typing import Any
 
 import gradio as gr
+import pytest
 from fakes import SpeechLib
 from gradio.components import Component
 
 from app_setup.app import App, AppModel, Section
 from app_setup.folder import ConfigFolder
 from app_setup.secrets import SecretStore
-from app_setup.ui import secrets_panel, setup_panel
+from app_setup.ui import secrets_panel, setup_panel, unsaved_notice
 from app_setup.ui.form import render_section, section_title
-from app_setup.ui.panels import LOCKED, _Preparations, _row
+from app_setup.ui.panels import (
+    DRAFT,
+    LOCKED,
+    UNSAVED_BOTTOM,
+    UNSAVED_SESSION,
+    UNSAVED_TOP,
+    _Preparations,
+    _row,
+)
 
 DEFAULTS = {"speech": {"module": {"type": "local-voice"}}}
 
 
 def _model(
-    tmp_path: Path, locked: Callable[[], bool] | None = None, **app: Any
+    tmp_path: Path,
+    locked: Callable[[], bool] | None = None,
+    environ: dict[str, str] | None = None,
+    **app: Any,
 ) -> AppModel:
     application = App(
         name="talk",
@@ -29,7 +42,8 @@ def _model(
         **app,
     )
     folder = ConfigFolder(tmp_path, DEFAULTS)
-    return AppModel(application, folder, SecretStore(folder.env_path, {}), locked)
+    store = SecretStore(folder.env_path, {} if environ is None else environ)
+    return AppModel(application, folder, store, locked)
 
 
 def _drawn(model: AppModel, config: dict[str, Any]) -> list[Any]:
@@ -141,9 +155,9 @@ def test_the_setup_panel_greys_save_and_reset_while_the_app_locks_the_config(
         setup_panel(_model(tmp_path, locked=lambda: running[0]))
     tick = _handler(page, "on_tick")
 
-    assert tick()[0] == ""
+    assert tick(DEFAULTS, 1, 0)[0] == ""
     running[0] = True
-    note, save, reset = tick()
+    note, save, reset = tick(DEFAULTS, 1, 0)[:3]
     assert note == LOCKED
     assert save["interactive"] is False and reset["interactive"] is False
 
@@ -247,21 +261,143 @@ def test_an_app_with_autostart_gets_its_checkbox_saved_at_once(tmp_path: Path) -
     assert model.autostart() is False
     assert not [b for b in without.blocks.values() if isinstance(b, gr.Checkbox)]
 
-    # The launch choice comes first, then a "Configuration" title over the buttons that
-    # act on the config only; an app without autostart has neither.
+    # The launch choice comes first, then the "Configuration" title over the config.
     drawn = list(page.blocks.values())
-    save = next(b for b in drawn if isinstance(b, gr.Button) and b.value == "Save")
-    title = next(
-        b
-        for b in drawn
-        if isinstance(b, gr.Markdown) and b.value == "### Configuration"
+    assert drawn.index(checkbox) < drawn.index(_markdown(drawn, "### Configuration"))
+
+
+def _markdown(drawn: list[Any], text: str) -> Any:
+    return next(b for b in drawn if isinstance(b, gr.Markdown) and b.value == text)
+
+
+def test_the_config_is_tried_in_the_sections_and_saved_at_the_bottom(
+    tmp_path: Path,
+) -> None:
+    for autostart in (True, None):
+        with gr.Blocks() as page:
+            setup_panel(
+                _model(
+                    tmp_path / str(autostart),
+                    autostart=autostart,
+                    sections=(
+                        Section("speech", SpeechLib()),
+                        Section("backup", SpeechLib()),
+                    ),
+                )
+            )
+        drawn = list(page.blocks.values())
+        buttons = [b for b in drawn if isinstance(b, gr.Button)]
+        save = next(b for b in buttons if b.value == "Save")
+        tests = [drawn.index(b) for b in buttons if b.value == "Test"]
+
+        # The title and the line saying which config the buttons try, then both
+        # sections' blocks, then Save, Revert and Reset.
+        title = drawn.index(_markdown(drawn, "### Configuration"))
+        line = drawn.index(_markdown(drawn, DRAFT))
+        assert len(tests) == 2
+        assert title < line < min(tests) and max(tests) < drawn.index(save)
+        revert = next(b for b in buttons if b.value == "Revert to saved")
+        assert drawn.index(save) < drawn.index(revert)
+
+
+def test_the_unsaved_lines_say_when_the_draft_differs_from_the_saved_config(
+    tmp_path: Path,
+) -> None:
+    model = _model(tmp_path)
+    cloud = {"speech": {"module": {"type": "cloud-voice", "voice_id": "v"}}}
+    with gr.Blocks() as page:
+        setup_panel(model)
+    on_draft, on_save = _handler(page, "on_draft"), _handler(page, "on_save")
+
+    assert on_draft(DEFAULTS, 1) == ("", "")
+    assert on_draft(cloud, 1) == (UNSAVED_TOP, UNSAVED_BOTTOM)
+    assert on_draft(cloud, 0) == ("", "")  # the draft not loaded yet: nothing to say
+    assert unsaved_notice(model, cloud) == UNSAVED_SESSION
+    assert unsaved_notice(model, {}) == ""
+
+    notice, _, *lines = on_save(cloud, 0, 1)
+
+    assert notice == "✅ Saved." and lines == ["", ""]
+    assert on_draft(DEFAULTS, 1) == (UNSAVED_TOP, UNSAVED_BOTTOM)
+    assert unsaved_notice(model, cloud) == ""
+    # Another tab saved: this tab's timer sees its draft differ now.
+    model.save(DEFAULTS)
+    assert _handler(page, "on_tick")(cloud, 1, 0)[3:5] == [UNSAVED_TOP, UNSAVED_BOTTOM]
+
+
+def _listeners(page: gr.Blocks, component: Any) -> dict[str, Any]:
+    """The function each event of *component* runs, by event name."""
+    return {
+        event: f
+        for f in page.fns.values()
+        for target, event in f.targets
+        if target == component._id
+    }
+
+
+def _environ(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    """An empty process environment, where the store puts its keys and the fake library
+    reads them."""
+    environ: dict[str, str] = {}
+    monkeypatch.setattr(os, "environ", environ)
+    return environ
+
+
+def test_a_field_left_checks_its_section_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model = _model(tmp_path, environ=_environ(monkeypatch))
+    model.secrets.set("OTHER_KEY", "s3cret")
+    cloud = {"speech": {"module": {"type": "cloud-voice", "voice_id": "v"}}}
+
+    # The form as the panel draws it, with the section's `edited` counter.
+    with gr.Blocks() as form:
+        draft, revision, edited = gr.State(cloud), gr.State(0), gr.State(0)
+        render_section(model, "speech", cloud, draft, revision, edited)
+    key_env = next(
+        b for b in form.blocks.values() if getattr(b, "label", None) == "api_key_env"
     )
-    assert drawn.index(checkbox) < drawn.index(title) < drawn.index(save)
-    assert not [
-        b
-        for b in without.blocks.values()
-        if isinstance(b, gr.Markdown) and b.value == "### Configuration"
-    ]
+    listeners = _listeners(form, key_env)
+    with gr.Blocks() as panel:
+        setup_panel(model)
+    (on_edited,) = _handlers(panel, "on_edited")
+
+    # Each keystroke writes the value without counting an edit; leaving the field or
+    # pressing Enter writes it and counts one, which checks the section again.
+    typed = listeners["input"].fn("OTHER_KEY", cloud)
+    left, count = listeners["blur"].fn("OTHER_KEY", cloud, 0)
+    assert typed == left
+    assert listeners["submit"].fn is listeners["blur"].fn
+    assert count == 1 and edited in listeners["blur"].outputs
+
+    _, summary, (_, items) = on_edited(left)
+    key = next(i for i in items if i.id == "key:OTHER_KEY")
+    assert key.status == "ready" and "ready for this config" in summary
+    assert on_edited(cloud)[2][1][-1].status == "missing"  # CLOUD_VOICE_KEY, unset
+
+
+def test_the_timer_checks_again_after_a_key_was_saved_and_only_then(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model = _model(tmp_path, environ=_environ(monkeypatch))
+    cloud = {"speech": {"module": {"type": "cloud-voice", "voice_id": "v"}}}
+    with gr.Blocks() as page:
+        setup_panel(model)
+    tick = _handler(page, "on_tick")
+    seen = model.secrets.revision
+
+    # Nothing written since the tab looked: no check, its seen revision kept.
+    quiet = tick(cloud, 1, seen)
+    assert all(isinstance(u, dict) and u.get("__type__") == "update" for u in quiet[5:])
+
+    model.secrets.set("CLOUD_VOICE_KEY", "s3cret")  # from the Secrets panel, say
+    seen_now, problems, summary, (_, items) = tick(cloud, 1, seen)[5:]
+
+    assert seen_now == model.secrets.revision != seen
+    assert "valid" in problems and "ready for this config" in summary
+    assert all(i.status == "ready" for i in items)
+    # Seen: the next tick checks nothing again.
+    assert tick(cloud, 1, seen_now)[6:] == quiet[6:]
 
 
 def test_a_field_not_set_shows_its_default_greyed_and_a_set_one_its_value(

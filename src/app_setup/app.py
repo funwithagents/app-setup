@@ -287,6 +287,12 @@ class AppModel:
     def saved_config(self) -> dict[str, Any]:
         return self.folder.read_config()
 
+    def unsaved(self, draft: Mapping[str, Any]) -> bool:
+        """Whether *draft* differs from the saved config. The whole config is compared, not
+        only the sections it uses: Save writes the whole draft, a section not used keeps its
+        document, and a section's `when` may read keys outside the sections."""
+        return dict(draft) != self.saved_config()
+
     def save(self, config: Mapping[str, Any]) -> None:
         """Save *config* as the current one. Refused while the config is locked."""
         self._refuse_when_locked()

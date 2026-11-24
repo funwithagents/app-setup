@@ -1,6 +1,6 @@
 # Draft and saved: say which config each button uses, and check again after a fix
 
-**Status:** In progress
+**Status:** Done
 
 Implements the updated [specs/ui.md](../specs/ui.md) ("The panels", "Using the panels"), [specs/app.md](../specs/app.md) (`unsaved`) and [specs/secrets.md](../specs/secrets.md) (`revision`): the Setup panel says that its sections' actions try the form's draft while a session uses the saved config, shows when the two differ, puts Save at the bottom, and runs a section's checks again when a field is finished or a key is saved. It leaves the form itself (what an edit writes, when it redraws) as it is.
 
