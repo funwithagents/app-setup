@@ -153,16 +153,18 @@ def test_a_section_with_problems_still_says_which_extra_to_install(
     # The voice id is missing, and the voice list that would fill it needs the extra:
     # the extra must be installable before the config is right.
     lib.check_setup = None  # type: ignore[assignment] - never asked
-    model = _model(tmp_path, lib)
+    # The key is set: its line is ready, and only the extra is missing.
+    model = _model(tmp_path, lib, environ={"CLOUD_VOICE_KEY": "k"})
     unfinished = {"speech": {"module": {"type": "cloud-voice"}}}
 
-    [item] = model.check_setup(unfinished)
+    item, key = model.check_setup(unfinished)
 
     assert (item.id, item.status, item.host_extras) == (
         "extra:speech-lib[cloud-voice]",
         "missing",
         ("speech-cloud",),
     )
+    assert (key.id, key.status) == ("key:CLOUD_VOICE_KEY", "ready")
     assert model.missing_extras(unfinished) == ["speech-cloud"]
     assert model.blockers(unfinished) == [
         "/speech/module/voice_id: voice_id is required",
@@ -174,7 +176,7 @@ def test_a_section_with_problems_still_says_which_extra_to_install(
         "requirement_status",
         lambda requirement: RequirementStatus(requirement, "installed"),
     )
-    [installed] = model.check_setup(unfinished)
+    installed, _ = model.check_setup(unfinished)
     assert (installed.status, installed.installable) == ("ready", False)
 
 
@@ -413,6 +415,35 @@ def test_a_key_item_is_told_the_variable_it_is_about(
     assert variables(renamed)["key:MY_KEY"] == "MY_KEY"
     # Files are not keys, nor is an extra.
     assert set(variables(DEFAULTS).values()) == {None}
+
+
+def test_a_key_is_asked_for_while_the_config_still_has_problems(
+    tmp_path: Path, lib: SpeechLib
+) -> None:
+    # The library is not asked about a config with problems, yet the key it names is known
+    # from the schema: the user learns of it before fixing the missing field, not after.
+    unset = _model(tmp_path / "unset", lib)
+    in_shell = _model(tmp_path / "shell", lib, environ={"CLOUD_VOICE_KEY": "k"})
+    no_voice = {"speech": {"module": {"type": "cloud-voice"}}}
+
+    items = {item.id: item for item in unset.check_setup(no_voice)}
+    key = items["key:CLOUD_VOICE_KEY"]
+
+    assert set(items) == {"extra:speech-lib[cloud-voice]", "key:CLOUD_VOICE_KEY"}
+    assert (key.status, key.required, key.variable) == (
+        "missing",
+        True,
+        "CLOUD_VOICE_KEY",
+    )
+    assert "CLOUD_VOICE_KEY" in key.detail
+    # Start names both: the field to fill in and the key to set.
+    blockers = unset.blockers(no_voice)
+    assert any("voice_id" in line for line in blockers)
+    assert any("CLOUD_VOICE_KEY" in line for line in blockers)
+    shell_key = next(
+        item for item in in_shell.check_setup(no_voice) if item.id.startswith("key:")
+    )
+    assert shell_key.status == "ready"
 
 
 def test_building_the_model_makes_the_folder_ready_and_loads_its_secrets(

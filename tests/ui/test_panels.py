@@ -26,6 +26,7 @@ from app_setup.ui.panels import (
     _Actions,
     _draw_table,
     _line,
+    _shape,
 )
 
 DEFAULTS = {"speech": {"module": {"type": "local-voice"}}}
@@ -223,10 +224,10 @@ def test_each_section_has_its_own_checks_acting_on_it_alone(tmp_path: Path) -> N
 
     buttons = [b.value for b in page.blocks.values() if isinstance(b, gr.Button)]
     speech_check, backup_check = _handlers(page, "on_check")
-    speech_problems, _, speech_items = speech_check(config)
+    speech_problems, _, speech_items, _ = speech_check(config)
     # A check finding what the last one found leaves the table as it is (not redrawn).
     assert speech_check(config)[2] == speech_items
-    backup_problems, _, _ = backup_check(config)
+    backup_problems, _, _, _ = backup_check(config)
 
     assert buttons.count("Test") == 2 and buttons.count("Prepare all") == 2
     assert "voice_id" not in speech_problems
@@ -239,14 +240,14 @@ def test_each_section_has_its_own_checks_acting_on_it_alone(tmp_path: Path) -> N
     ]
 
     # A section the config does not use is hidden, the others shown and checked. Each
-    # section: its block, its problems, its summary, its items, its output.
+    # section: its block, its problems, its summary, its items, its lines, its output.
     redraw = _handler(page, "on_redraw")
     shown = redraw(config)
     hidden = redraw({**config, "use_backup": False})
-    assert (shown[0]["visible"], shown[5]["visible"]) == (True, True)
-    assert (hidden[0]["visible"], hidden[5]["visible"]) == (True, False)
-    assert "/backup/module/voice_id" in shown[6]
-    assert hidden[6] == "" and hidden[8] == ()
+    assert (shown[0]["visible"], shown[6]["visible"]) == (True, True)
+    assert (hidden[0]["visible"], hidden[6]["visible"]) == (True, False)
+    assert "/backup/module/voice_id" in shown[7]
+    assert hidden[7] == "" and hidden[9] == ()
 
 
 def test_an_app_with_autostart_gets_its_checkbox_saved_at_once(tmp_path: Path) -> None:
@@ -325,6 +326,13 @@ def test_the_unsaved_lines_say_when_the_draft_differs_from_the_saved_config(
     assert notice == "✅ Saved." and lines == ["", ""]
     assert on_draft(DEFAULTS, 1) == (UNSAVED_TOP, UNSAVED_BOTTOM)
     assert unsaved_notice(model, cloud) == ""
+    # A config with a problem is saved all the same, nothing lost, and Save says it
+    # cannot run yet.
+    no_voice = {"speech": {"module": {"type": "cloud-voice"}}}
+    notice, _, *lines = on_save(no_voice, 1, 1)
+    assert notice.startswith("⚠️ Saved, with 1 problem in the config")
+    assert model.saved_config() == no_voice and lines == ["", ""]
+    model.save(cloud)
     # Another tab saved: this tab's timer sees its draft differ now.
     model.save(DEFAULTS)
     assert _handler(page, "on_tick")(cloud, 1, 0)[3:5] == [UNSAVED_TOP, UNSAVED_BOTTOM]
@@ -375,7 +383,7 @@ def test_a_field_left_checks_its_section_again(
     assert listeners["submit"].fn is listeners["blur"].fn
     assert count == 1 and edited in listeners["blur"].outputs
 
-    _, summary, items = on_edited(left)
+    _, summary, items, _ = on_edited(left)
     key = next(i for i in items if i.id == "key:OTHER_KEY")
     assert key.status == "ready" and summary == "✅ **Ready**"
     assert on_edited(cloud)[2][-1].status == "missing"  # CLOUD_VOICE_KEY, unset
@@ -396,7 +404,7 @@ def test_the_timer_checks_again_after_a_key_was_saved_and_only_then(
     assert all(isinstance(u, dict) and u.get("__type__") == "update" for u in quiet[5:])
 
     model.secrets.set("CLOUD_VOICE_KEY", "s3cret")  # from the Secrets panel, say
-    seen_now, problems, summary, items = tick(cloud, 1, seen)[5:]
+    seen_now, problems, summary, items, _ = tick(cloud, 1, seen)[5:]
 
     assert seen_now == model.secrets.revision != seen
     assert "valid" in problems and summary == "✅ **Ready**"
@@ -549,11 +557,11 @@ def _table(model: AppModel, actions: _Actions, config: dict[str, Any]) -> gr.Blo
     check updates."""
     with gr.Blocks() as page:
         draft = gr.State(config)
-        checks = (gr.Markdown(), gr.Markdown(), gr.State(()))
+        checks = (gr.Markdown(), gr.Markdown(), gr.State(()), gr.State(()))
 
         def reports(config: dict[str, Any]) -> tuple[Any, ...]:
             items = model.check_setup(config, ["speech"])
-            return "", "", tuple(items)
+            return "", "", tuple(items), _shape(items)
 
         _draw_table(
             model,
@@ -625,7 +633,9 @@ def test_installs_run_one_at_a_time_the_second_waiting_its_turn(
 
     status, explanation, _ = _line(actions, gate)
     assert status == "⏳ **Installing…**"
-    assert explanation.startswith("Resolved 1 extra(s) (")  # uv's latest line, the time
+    assert explanation.startswith(
+        "uv: Resolved 1 extra(s) ("
+    )  # uv's latest line, the time
     assert _line(actions, local)[:2] == (
         "⏳ **Waiting**",
         "Waiting for another install…",
@@ -660,7 +670,7 @@ def test_install_all_installs_every_missing_extra_in_one_run(
     first = next(install_all)
     _wait(lambda: len(installer.runs) == 1)
     installer.gates[0].set()
-    *_, (output, _, summary, _) = [first, *install_all]
+    *_, (output, _, summary, _, _) = [first, *install_all]
 
     assert installer.runs == [["speech-gate", "speech-local"]]
     assert output["value"].startswith("Installing: speech-gate, speech-local")
@@ -684,7 +694,7 @@ def test_an_extra_installed_from_its_line_checks_the_section_again(
         installer.gates[0].set()
 
     threading.Thread(target=release).start()
-    _, _, items = on_install(DEFAULTS)
+    _, _, items, _ = on_install(DEFAULTS)
 
     assert installer.runs == [["speech-local"]]
     assert items[0].status == "ready"
@@ -700,7 +710,7 @@ def test_a_key_saved_on_its_line_reaches_the_store_and_turns_ready(
     (on_save_key,) = _handlers(page, "on_save_key")
     seen = model.secrets.revision
 
-    cleared, _, _, items = on_save_key("s3cret", cloud)
+    cleared, _, _, items, _ = on_save_key("s3cret", cloud)
 
     assert cleared == ""  # the value is never shown back
     assert model.secrets.file_names() == ["CLOUD_VOICE_KEY"]

@@ -391,6 +391,10 @@ class AppModel:
                     copy.deepcopy(dict(document))
                 ):
                     found.append(self._item(name, _extra_item(requirement)))
+                # The keys too: the variables the document names are read from the
+                # schema, so a key is asked for while a field is still being filled in.
+                for key in self._key_items(name, document):
+                    found.append(self._item(name, key, [key["title"]]))
                 continue
             description = self.description(name)
             variables = (
@@ -403,6 +407,37 @@ class AppModel:
             ):
                 found.append(self._item(name, item, variables))
         return found
+
+    def _key_items(
+        self, section: str, document: Mapping[str, Any]
+    ) -> list[dict[str, Any]]:
+        """A `check_setup` item per environment variable *document* names for a key, from
+        the schema and the environment alone: for a section whose config the library cannot
+        be asked about yet."""
+        description = self.description(section)
+        if description is None:
+            return []
+        items: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for path, variable in secret_variables(description.schema, document):
+            if variable in seen:
+                continue
+            seen.add(variable)
+            present = self.secrets.source(variable) != "missing"
+            items.append(
+                {
+                    "id": f"key:{variable}",
+                    "title": variable,
+                    "status": "ready" if present else "missing",
+                    "detail": "Set."
+                    if present
+                    else f"Set the environment variable {variable} (named by "
+                    f"'{path.rsplit('/', 1)[-1]}').",
+                    "preparable": False,
+                    "required": True,
+                }
+            )
+        return items
 
     def _item(
         self,

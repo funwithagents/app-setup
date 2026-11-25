@@ -112,9 +112,16 @@ def item_status(item: SetupItem, progress: Progress | None = None) -> tuple[str,
                 f"`{_bar(progress.fraction)}` {progress.message}".rstrip(),
             )
         if progress.running:
+            # uv's own words ("Downloading numpy", "Prepared 3 packages") are marked as
+            # its: read alone they would name another action than the install.
+            message = (
+                f"uv: {progress.message}"
+                if progress.install and progress.message
+                else progress.message
+            )
             return (
                 f"⏳ **{doing}…**",
-                _join(progress.message, f"({progress.elapsed_s:.0f} s)"),
+                _join(message, f"({progress.elapsed_s:.0f} s)"),
             )
         if progress.ok:
             return "✅ **Ready**", "Installed." if progress.install else "Prepared."

@@ -308,10 +308,20 @@ def _group(
             interactive=True,
         )
 
+        # The object's own module choice, if it has one: switched on, it starts on a module.
+        choice = next(
+            (
+                item.choice
+                for item in group.items
+                if isinstance(item, FormChoice) and item.path == group.path
+            ),
+            None,
+        )
+
         def toggle(enabled: bool, config: Config, rev: int) -> tuple[Config, int]:
             if (get_at(config, full) is not ABSENT) == enabled:
                 return config, rev  # already so: no redraw
-            return toggle_group(config, full, enabled), rev + 1
+            return toggle_group(config, full, enabled, choice), rev + 1
 
         switch.input(
             toggle, inputs=[switch, draft, revision], outputs=[draft, revision]

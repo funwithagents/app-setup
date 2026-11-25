@@ -93,7 +93,8 @@ def test_a_line_being_acted_on_shows_its_progress_then_how_it_ended() -> None:
     )
     assert item_status(EXTRA, installing) == (
         "⏳ **Installing…**",
-        "Downloading torch (120 MB) (5 s)",
+        # uv's own words, marked as such: "Downloading" alone reads as another action.
+        "uv: Downloading torch (120 MB) (5 s)",
     )
     assert item_status(EXTRA, waiting) == (
         "⏳ **Waiting**",

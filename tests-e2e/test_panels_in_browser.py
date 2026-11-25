@@ -165,7 +165,7 @@ def test_switching_module_typing_and_picking_from_a_list_are_saved(
     page.get_by_text("voice_id is required").wait_for()
     voice_id.fill("v-42")
     voice_id.press("Tab")
-    page.get_by_role("button", name="Save", exact=True).click()
+    page.get_by_role("button", name="Save", exact=True).last.click()
     page.get_by_text("Saved.").wait_for()
 
     assert json.loads(folder.config_path.read_text()) == {
@@ -178,7 +178,7 @@ def test_switching_module_typing_and_picking_from_a_list_are_saved(
     page.get_by_label("Voices", exact=True).click()
     page.get_by_role("option", name="Cy (fr)").click()
     _textbox(page, "voice").wait_for()
-    page.get_by_role("button", name="Save", exact=True).click()
+    page.get_by_role("button", name="Save", exact=True).last.click()
     page.wait_for_timeout(1000)
 
     assert json.loads(folder.config_path.read_text()) == {
@@ -196,11 +196,12 @@ def test_the_keys_follow_the_draft_and_save_waits_for_the_session_to_stop(
     _textbox(page, "voice_id *").wait_for()
 
     page.get_by_role("tab", name="Keys").click()
-    page.get_by_text("CLOUD_VOICE_KEY").wait_for()  # named by the unsaved draft
+    # Named by the unsaved draft: its row in the Keys tab (the Setup tab names it too).
+    page.get_by_role("cell", name="CLOUD_VOICE_KEY").wait_for()
 
     served.running = True
     page.get_by_role("tab", name="Setup").click()
-    save = page.get_by_role("button", name="Save", exact=True)
+    save = page.get_by_role("button", name="Save", exact=True).last
     page.get_by_text("A session is running").wait_for()
     assert save.is_disabled()
 
@@ -266,7 +267,7 @@ def test_a_value_typed_is_unsaved_until_it_is_saved(
     page.get_by_text("Unsaved changes — Save is at the bottom.").wait_for()
     page.get_by_text(re.compile(r"Unsaved changes\.$")).wait_for()
 
-    page.get_by_role("button", name="Save", exact=True).click()
+    page.get_by_role("button", name="Save", exact=True).last.click()
     page.get_by_text("Saved.").wait_for()
     unsaved.first.wait_for(state="hidden")
     assert unsaved.count() == 0
@@ -325,6 +326,12 @@ def test_a_key_is_saved_from_its_line(served: Served, browser: object) -> None:
     voice_id.wait_for()
     voice_id.press_sequentially("v-42")
     voice_id.press("Tab")
+    # The library's own check, once the config is complete: its words for the extra.
+    # Before it, app-setup's (from the package's metadata) say the extra is missing, so
+    # the table is drawn again when the library's arrive.
+    page.locator(".row", has_text="cloud-voice extra").filter(
+        has_text="Ready"
+    ).last.wait_for()
     line = page.locator(".row", has_text="Missing – required").last
     line.get_by_text("CLOUD_VOICE_KEY").first.wait_for()
 
