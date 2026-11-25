@@ -13,10 +13,8 @@ from __future__ import annotations
 
 import copy
 import html
-import importlib.util
 import itertools
 import re
-import sys
 import threading
 import time
 from collections.abc import Callable, Sequence
@@ -84,44 +82,6 @@ REQUIRED = (
     "A value in grey is the default: not set, so the library's own applies, and not "
     "saved. Only what you set is saved."
 )
-
-
-def _guard_matplotlib() -> None:
-    """Keep gradio's per-event matplotlib switch from tripping over an install.
-
-    gradio wraps every event in ``gradio.utils.MatplotlibBackendMananger``: on entering, it
-    imports matplotlib if it can and records its backend; on leaving, it imports it again
-    and restores that backend. An install from the panel can bring matplotlib in while the
-    app runs (a library's extra depends on it). Then the first event after it imports a
-    matplotlib that has never run here, whose ``get_backend`` builds its font cache in
-    gradio's event loop: the whole server stalls for seconds (no tick, no line updated).
-    And an event open while it lands enters without it and leaves with it, fails on the
-    backend it never recorded, and its outputs are lost (a section's check after an
-    install, its new lines with them). Found driving a real install of an extra pulling
-    torch and transformers.
-
-    Guarded: a matplotlib importable when the panel was built, or already imported, is
-    switched as gradio does; one installed since is left alone until something imports
-    it; and leaving restores only what entering recorded. Installed once per process."""
-    from gradio import utils
-
-    original = utils.MatplotlibBackendMananger
-    if getattr(original, "_app_setup_guard", False):
-        return
-    present_at_start = importlib.util.find_spec("matplotlib") is not None
-
-    class Guarded(original):  # type: ignore[misc, valid-type]
-        _app_setup_guard = True
-
-        def __enter__(self) -> None:
-            if present_at_start or "matplotlib" in sys.modules:
-                super().__enter__()
-
-        def __exit__(self, *exc: object) -> None:
-            if hasattr(self, "_original_backend"):
-                super().__exit__(*exc)
-
-    utils.MatplotlibBackendMananger = Guarded  # type: ignore[misc]
 
 
 def unsaved_notice(model: AppModel, draft: Config) -> str:
@@ -562,9 +522,10 @@ def _wire_table(
             elif actions.install([item], item.host_extras[:1]) is None:
                 return (gr.skip(),) * (3 + len(checks))
             # Started, on its own thread: the line shows it, and the rows' timer follows
-            # it to its end. An install is never waited for here: an event open while
-            # packages land can be lost (`_guard_matplotlib`), and the section is checked
-            # again by the rows' timer once it has ended well.
+            # it to its end, then checks the section again once it has ended well. An
+            # install is never waited for here: gradio wraps each event in a matplotlib
+            # switch, and an event open while an install lands matplotlib fails on
+            # leaving, its outputs lost (the section's new lines with them).
             status, explanation, state = _line(actions, item)
             return (
                 _cells(item.title, status, explanation),
@@ -1279,7 +1240,6 @@ def setup_panel(model: AppModel) -> SetupPanel:
     For a model that is not editable (an app running a file as it is): a line naming the
     file, each section's form read-only, its checks and their actions as always, and
     nothing to save: no Save, Revert or Reset, no unsaved line, no launch choice."""
-    _guard_matplotlib()
     editable = model.editable
     source = model.source
     draft = gr.State({})

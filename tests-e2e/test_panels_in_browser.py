@@ -85,13 +85,16 @@ class Installer:
 
 
 def _land_matplotlib(where: Path) -> None:
-    """A stand-in matplotlib, landed mid-install: its `get_backend` takes 3 s, as a real
-    one's does the first time it runs (it builds its font cache)."""
+    """A stand-in matplotlib, landed mid-install: its first `get_backend` takes 3 s, as a
+    real one's does (it builds its font cache), the others none."""
     package = where / "matplotlib"
     package.mkdir(parents=True, exist_ok=True)
     (package / "__init__.py").write_text(
         "import time\n"
-        "def get_backend():\n    time.sleep(3)\n    return 'agg'\n"
+        "_cache = []\n"
+        "def get_backend():\n"
+        "    if not _cache:\n        time.sleep(3)\n        _cache.append(1)\n"
+        "    return 'agg'\n"
         "def use(name):\n    pass\n"
     )
     importlib.invalidate_caches()
@@ -643,7 +646,9 @@ def test_an_install_bringing_matplotlib_is_followed_live_and_its_new_lines_shown
     served: Served, browser: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # The library has no line but its extra until it is installed; the install lands a
-    # matplotlib, as the extra of a real library pulling torch and transformers did.
+    # matplotlib, as the extra of a real library pulling torch and transformers did:
+    # gradio's per-event matplotlib switch fails an event open while it lands, so no
+    # event may wait for the install.
     served.lib.installed["local-voice"] = False
     landed = tmp_path / "site"
     landed.mkdir()
@@ -673,7 +678,5 @@ def test_an_install_bringing_matplotlib_is_followed_live_and_its_new_lines_shown
             "Ready"
         ).wait_for()
         assert page.get_by_text("Error", exact=True).count() == 0
-        # Never imported by the page's events: nothing waited on it.
-        assert "matplotlib" not in sys.modules
     finally:
         sys.modules.pop("matplotlib", None)

@@ -32,7 +32,7 @@ Implements [specs/setup-overview.md](../specs/setup-overview.md) (still **Draft*
    - the whole config's line and actions removed (the folds' lines say it); `AppModel.summary`, `summary_line` and `config_summary` with them (nothing else used them);
    - a revision per section (a hidden `gr.Number`): a change of structure in a section (and Add, Remove) redraws and checks it alone; the panel's revision (load, Revert, Reset) every section; each section's redraw passes over the others' `when` only, hiding the folds no longer used and bumping the revision of a section newly used (a tab's layout kept in a state). Measured on six sections whose check takes 0.5 s: Add from 6.1 s to 1.4 s, Remove from 5.1 s to 1.1 s;
    - an install never waited for by an event: a line's Install and a section's Install all return at once; the rows' timer follows it (the line, the section's output box), shows its end, then checks the section again at its next tick (the first import of the library just installed can hold the process for seconds);
-   - gradio's per-event matplotlib switch guarded (`_guard_matplotlib`): an extra bringing matplotlib in froze the server (its font cache built in gradio's event loop) and lost an event's outputs (an `AttributeError` on leaving), found driving a real install of wica-interaction's `vision` extra.
+   - why: gradio's per-event matplotlib switch. An extra bringing matplotlib in froze the server (its font cache built in gradio's event loop) and failed the event that waited for the install (an `AttributeError` on leaving, its outputs lost), found driving a real install of an app's `vision` extra. No class of gradio's is replaced: no event spans an install, so none is lost (checked on four real runs).
 
 ## Verification
 

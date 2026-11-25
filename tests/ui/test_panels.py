@@ -1,7 +1,5 @@
-import importlib
 import json
 import os
-import sys
 import threading
 import time
 from collections.abc import Callable
@@ -839,36 +837,6 @@ def test_an_extra_installed_from_its_line_is_followed_then_checks_the_section_ag
     ]
     assert fold["label"] == "Speech — Local voice · ❌ 1 required item missing"
     assert timer.active is False
-
-
-def test_gradio_s_matplotlib_switch_survives_matplotlib_installed_mid_event(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from gradio import utils
-
-    monkeypatch.setattr(
-        utils, "MatplotlibBackendMananger", utils.MatplotlibBackendMananger
-    )
-    monkeypatch.syspath_prepend(str(tmp_path))
-    monkeypatch.delitem(sys.modules, "matplotlib", raising=False)
-    with gr.Blocks():
-        setup_panel(_model(tmp_path / "app"))  # installs the guard
-    switch = utils.MatplotlibBackendMananger()
-
-    # An event enters with no matplotlib; an install brings one in; the event leaves.
-    switch.__enter__()
-    (tmp_path / "matplotlib").mkdir()
-    (tmp_path / "matplotlib" / "__init__.py").write_text(
-        "def get_backend():\n    raise AssertionError('imported in the event loop')\n"
-        "def use(name):\n    raise AssertionError('switched')\n"
-    )
-    importlib.invalidate_caches()
-    switch.__exit__(None, None, None)  # gradio's own raised AttributeError here
-
-    # Later events leave the new matplotlib alone until something imports it.
-    with utils.MatplotlibBackendMananger():
-        pass
-    assert "matplotlib" not in sys.modules
 
 
 def test_a_key_saved_on_its_line_reaches_the_store_and_turns_ready(
