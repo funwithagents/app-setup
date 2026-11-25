@@ -94,26 +94,32 @@ def test_a_line_being_acted_on_shows_its_progress_then_how_it_ended() -> None:
         "⏳ **Preparing…**",
         "Building the cache (12 s)",
     )
+    # An install: uv's own words, marked as such ("Downloading" alone reads as another
+    # action), then what comes next, said before the page may stop updating: no count of
+    # seconds, which would stay stuck at a value then.
     assert item_status(EXTRA, installing) == (
         "⏳ **Installing…**",
-        # uv's own words, marked as such: "Downloading" alone reads as another action.
-        "uv: Downloading torch (120 MB) (5 s)",
+        "uv: Downloading torch (120 MB). Once installed, loading the new packages the first time can take a while, and the page may stop updating meanwhile.",
+    )
+    assert item_status(EXTRA, Progress(True, None, "", 0.1, install=True)) == (
+        "⏳ **Installing…**",
+        "Once installed, loading the new packages the first time can take a while, and the page may stop updating meanwhile.",
     )
     assert item_status(EXTRA, waiting) == (
         "⏳ **Waiting**",
-        "Waiting for another install…",
+        "Waiting for another install… Once installed, loading the new packages the first time can take a while, and the page may stop updating meanwhile.",
     )
     assert item_status(VOICE, Progress(False, 1.0, "", 9.0, ok=True)) == (
         "✅ **Ready**",
         "Prepared.",
     )
-    # An install ended well: its section is checked again next (the library just
-    # installed loads then, slowly the first time), and the line says so before.
+    # An install ended well: its section is checked again next (what it installed loads
+    # then, slowly the first time), and the line says so before.
     assert item_status(
         EXTRA, Progress(False, None, "", 9.0, ok=True, install=True)
     ) == (
         "✅ **Ready**",
-        "Installed. Checking the section again…",
+        "Installed. Checking the section again: this first check loads the new packages and can take up to a minute; the lines update when it is done.",
     )
     assert item_status(VOICE, Progress(False, 0.2, "Unreachable.", 2.0, ok=False)) == (
         "❌ **Failed**",

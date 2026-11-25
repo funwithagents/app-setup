@@ -28,7 +28,9 @@ from app_setup.folder import ConfigFolder
 from app_setup.form import selected_modules
 from app_setup.ui.form import render_section, section_title
 from app_setup.ui.report import (
+    CHECKING_NOTE,
     HEADER,
+    INSTALLING_NOTE,
     Progress,
     config_report,
     env_file_rows,
@@ -972,11 +974,18 @@ def _probe_line(model: AppModel, config: Config, name: str) -> str:
 def _install_text(
     actions: _Actions, run: _Run, extras: Sequence[str], done: bool
 ) -> str:
-    """What an Install all's output box shows: the extras, uv's lines, how it ended."""
+    """What an Install all's output box shows: the extras, uv's lines, then what comes
+    next (the same words as the lines': `INSTALLING_NOTE` while it runs, `CHECKING_NOTE`
+    once it has ended well), or how it failed."""
     heading = f"Installing: {', '.join(extras)}"
     with actions.lock:
         waiting = ["Waiting for another install…"] if run.waiting and not done else []
-        end = ["Done." if run.ok else ""] if done else []
+        if not done:
+            end = [INSTALLING_NOTE]
+        elif run.ok:
+            end = ["Done.", CHECKING_NOTE]
+        else:
+            end = []
         return "\n".join([heading, *waiting, *run.lines, *end]).rstrip()
 
 

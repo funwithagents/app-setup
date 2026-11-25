@@ -112,6 +112,21 @@ def _bar(fraction: float) -> str:
 
 
 HEADER = ("**Item**", "**Status**", "**Explanation**", "**Action**")
+
+# What an install's line (and a section's Install all box) says while it runs, and once it
+# has ended well. Both are shown before the page may stop updating: once an install lands,
+# the first load of what it brought (by the page itself, then by the section's check) can
+# hold the app for a while, and no update reaches the page meanwhile, so the words shown
+# when it starts are the ones read throughout. No running count of seconds on an install:
+# one stuck at a value would read as a hang.
+INSTALLING_NOTE = (
+    "Once installed, loading the new packages the first time can take a while, and "
+    "the page may stop updating meanwhile."
+)
+CHECKING_NOTE = (
+    "Installed. Checking the section again: this first check loads the new packages "
+    "and can take up to a minute; the lines update when it is done."
+)
 OPTIONAL = "Without it, the first start gets it itself and is slower."
 
 
@@ -138,29 +153,29 @@ def item_status(item: SetupItem, progress: Progress | None = None) -> tuple[str,
             ("Install", "Installing") if progress.install else ("Prepare", "Preparing")
         )
         if progress.waiting:
-            return "⏳ **Waiting**", "Waiting for another install…"
+            return "⏳ **Waiting**", _join(
+                "Waiting for another install…", INSTALLING_NOTE
+            )
         if progress.running and progress.fraction is not None:
             return (
                 f"⏳ **{doing}… {progress.fraction:.0%}**",
                 f"`{_bar(progress.fraction)}` {progress.message}".rstrip(),
             )
-        if progress.running:
+        if progress.running and progress.install:
             # uv's own words ("Downloading numpy", "Prepared 3 packages") are marked as
             # its: read alone they would name another action than the install.
-            message = (
-                f"uv: {progress.message}"
-                if progress.install and progress.message
-                else progress.message
-            )
+            message = f"uv: {progress.message}." if progress.message else ""
+            return "⏳ **Installing…**", _join(message, INSTALLING_NOTE)
+        if progress.running:
             return (
                 f"⏳ **{doing}…**",
-                _join(message, f"({progress.elapsed_s:.0f} s)"),
+                _join(progress.message, f"({progress.elapsed_s:.0f} s)"),
             )
         if progress.ok:
             # An install changes what the section needs: it is checked again next, which
-            # loads the library just installed (slow the first time).
+            # loads what it installed (slow the first time).
             if progress.install:
-                return "✅ **Ready**", "Installed. Checking the section again…"
+                return "✅ **Ready**", CHECKING_NOTE
             return "✅ **Ready**", "Prepared."
         return "❌ **Failed**", _join(progress.message, f"**{verb}** tries again.")
     if item.status == "ready":

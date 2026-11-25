@@ -33,6 +33,7 @@ from app_setup.ui.panels import (
     _table_lines,
     _wire_table,
 )
+from app_setup.ui.report import CHECKING_NOTE, INSTALLING_NOTE
 
 DEFAULTS = {"speech": {"module": {"type": "local-voice"}}}
 
@@ -715,21 +716,16 @@ def test_installs_run_one_at_a_time_the_second_waiting_its_turn(
 
     status, explanation, _ = _line(actions, gate)
     assert status == "⏳ **Installing…**"
-    assert explanation.startswith(
-        "uv: Resolved 1 extra(s) ("
-    )  # uv's latest line, the time
+    assert explanation == f"uv: Resolved 1 extra(s). {INSTALLING_NOTE}"
     assert _line(actions, local)[:2] == (
         "⏳ **Waiting**",
-        "Waiting for another install…",
+        f"Waiting for another install… {INSTALLING_NOTE}",
     )
     assert _line(actions, local)[2]["interactive"] is False
 
     installer.gates[0].set()
     _wait(lambda: len(installer.runs) == 2)  # the second starts once the first is done
-    assert _line(actions, gate)[:2] == (
-        "✅ **Ready**",
-        "Installed. Checking the section again…",
-    )
+    assert _line(actions, gate)[:2] == ("✅ **Ready**", CHECKING_NOTE)
     assert _line(actions, local)[0] == "⏳ **Installing…**"
     installer.fail = True
     installer.gates[1].set()
@@ -765,7 +761,12 @@ def test_install_all_installs_every_missing_extra_in_one_run_never_waited_for(
     _wait(lambda: len(installer.runs) == 1)
     # The rows' timer follows it: its lines, its output box.
     *_, box, timer = _rows_tick(page, DEFAULTS, items)
-    assert "Resolved 2 extra(s)" in box["value"] and timer.active is True
+    assert box["value"].splitlines() == [
+        "Installing: speech-gate, speech-local",
+        "Resolved 2 extra(s)",
+        INSTALLING_NOTE,
+    ]
+    assert timer.active is True
 
     lib.installed["local-voice"] = True  # what the install did
     installer.gates[0].set()
@@ -778,7 +779,13 @@ def test_install_all_installs_every_missing_extra_in_one_run_never_waited_for(
 
     _wait(ended)
     *_, box, timer = shown
-    assert box["value"].endswith("Done.") and timer.active is True
+    assert box["value"].splitlines() == [
+        "Installing: speech-gate, speech-local",
+        "Resolved 2 extra(s)",
+        "Done.",
+        CHECKING_NOTE,
+    ]
+    assert timer.active is True
     # ...then, at the next tick, the section checked again.
     *_, checked, _, _, timer = _rows_tick(page, DEFAULTS, items)
 
