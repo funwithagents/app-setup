@@ -29,7 +29,7 @@ The rest of the page is the app's: above all its session, starting the runtime w
 ## Who does what
 
 - **A library declares.** It implements the contract ([module-contract.md](module-contract.md)): it describes its config as a schema, says which extras a config needs, checks the config itself, checks what this machine is missing for it (extras, keys, files), downloads what it can, and runs it once on request. It imports nothing from app-setup and returns plain data.
-- **app-setup acts.** It renders the form from the schema, tells from package metadata whether an extra can be installed on this platform, maps it to the host's own extra and installs it with uv, stores secrets, keeps the config folder, and says why a config cannot run yet.
+- **app-setup acts.** It renders the form from the schema, tells from package metadata whether an extra can be installed on this platform, maps it to the host's own extra and installs it with uv, stores secrets, keeps the config folder (or a config file), and says why a config cannot run yet.
 - **The host composes.** It lists its sections, hands each library's contract to app-setup, places the two panels in its page, and runs its sessions from the saved config, telling app-setup when one is running.
 
 ## The Setup sequence
@@ -54,5 +54,6 @@ Outside the sequence, `probe` runs one section for real on request (a Test butto
 | [extras.md](extras.md) | Whether an extra is installed, which host extra carries it, the install |
 | [app.md](app.md) | What an app declares (its sections, its default config) and the model behind the panels |
 | [config-folder.md](config-folder.md) | The app's folder: the current config, the secrets file |
+| [config-file.md](config-file.md) | A single config file instead: run as it is (`--config`), or edited by a config app; a one-section app's config as its library's own document (`bare`) |
 | [secrets.md](secrets.md) | The keys: where each comes from, the `.env` |
 | [ui.md](ui.md) | The Setup and Secrets panels an app places in its page, the form drawn from a schema |

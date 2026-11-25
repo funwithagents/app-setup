@@ -4,10 +4,12 @@ code:
   - src/app_setup/ui/form.py
   - src/app_setup/ui/panels.py
   - src/app_setup/ui/report.py
+  - src/app_setup/ui/config_page.py
 tests:
   - tests/test_form.py
   - tests/ui/test_panels.py
   - tests/ui/test_report.py
+  - tests/ui/test_config_page.py
   - tests-e2e/test_panels_in_browser.py
 ---
 
@@ -29,6 +31,7 @@ from app_setup.folder import ConfigFolder, default_folder
 from app_setup.ui import secrets_panel, setup_panel, unsaved_notice
 
 model = AppModel(APP, ConfigFolder(default_folder(APP.name), APP.default_config), locked=session.running)
+# or the source the command line names: open_source(options, APP) (config-file.md)
 
 with gr.Blocks() as page:
     with gr.Tab("Session"):
@@ -87,6 +90,8 @@ From top to bottom:
   - for one section, when the user finishes editing one of its fields: a text box left (`blur`) or Enter pressed in it (`submit`), a JSON box left, a checkbox ticked, a choice made in a list of values. Not on each keystroke: a check may import a provider;
   - for every section the config uses, in every browser tab, when a key was saved or removed (`SecretStore.revision` changed, [secrets.md](secrets.md)), the Secrets panel's or any other write: the panel's one-second timer notices the change (each tab keeps the last revision it saw) and checks again then, and only then.
 
+**Read-only**, when the model is not editable (an app running a file as it is, [config-file.md](config-file.md)): under the Configuration title, the line "Running `<file>` as it is. To change it, edit the file, then Stop and Start the session." instead of the draft line; each section's form drawn read-only (every field shown, none editable, no module switch, no list button: `render_section(..., readonly=True)`, no listener); each section's checks and table as above, since they install, write keys and prepare files without changing the config; no unsaved lines, no Save, Revert or Reset, no launch checkbox. A source without a default (a config app's file) gets no **Reset to defaults**, and the draft line says Save writes the file.
+
 It returns what the app can listen to:
 
 | Field | What it is |
@@ -97,11 +102,13 @@ It returns what the app can listen to:
 **`secrets_panel(model, config=None)`**, in two parts, names only, values never shown:
 
 - **Keys the config uses**: the variables the config names, each with its source and the fields naming it; a variable the shell sets that the `.env` also sets reads "the shell (the folder's .env also sets it, unused)", with how to use the file's value. Under it, a name and a password field to save one to the folder's `.env`; saving a variable the shell sets says the shell's value is the one used.
-- **In the folder's .env**: every variable the file sets, always listed, each with what uses it (the fields of the current config naming it, or none; unused when the shell sets it too) and its own **Remove** button, so a stale key is removed in one click. **Refresh** reads the file again.
+- **In the folder's .env** (its title naming the source's `.env` path, a folder's or the one next to a config file): every variable the file sets, always listed, each with what uses it (the fields of the current config naming it, or none; unused when the shell sets it too) and its own **Remove** button, so a stale key is removed in one click. **Refresh** reads the file again.
 
 A key saved or removed elsewhere — on a line of the Setup panel, in another browser tab — shows without a reload: the panel notes the store's `revision` with the table it draws on page load, and its one-second timer draws both parts again when the revision changed (noted at load, not at the timer's first tick: a timer in a tab not opened yet only starts with it). Given a `gr.State` (a Setup panel's `draft`), the panel reads the variables from it and follows each change, so the key a newly chosen module needs appears at once; without one, it reads the saved config, on page load and on **Refresh**. The shell itself is not listed: it is read once, when the app starts, and holds much besides keys.
 
 Every browser tab has its own draft of the config; the saved config and the secrets are the model's, shared by all.
+
+**`config_page(model) -> gr.Blocks`** ([config-file.md](config-file.md), "A config app"): a page of two tabs, **Setup** (`setup_panel(model)`) and **Secrets** (`secrets_panel(model, setup.draft)`), under a line naming the file edited, and no session.
 
 ## The form
 
@@ -130,9 +137,10 @@ A change of structure (a module switched, an optional object turned on or off, a
 
 - `tests/test_form.py`: the tree for each kind of item; every coercion and every refusal; writing, creating and removing; switching module; optional objects; the variables a config names.
 - `tests/ui/test_panels.py`: the form drawn into a real gradio page (the selected module's fields, the hidden key, the list button, a section without its library); both panels drawn in an app's own tabs, next to its own components; the panel's order (the Configuration line, the sections, then Save at the bottom); Save and Reset disabled while the app locks the config; the unsaved lines for a draft equal to the saved config and one differing, and `unsaved_notice`; a field left re-running its section's checks; the timer re-running the checks after a key was saved, and not otherwise; a section's table: its header and one line per item with the right action (Install for an installable extra, a key field and Save for a missing key, Prepare for a preparable item not ready, none otherwise); two installs queued, the second waiting then running; Install all in one run; a key saved from its line reaching the store and the line turning ready; the Secrets panel reading the config it follows, else the saved one.
+- `tests/ui/test_panels.py`, read-only: the file's line, the form read-only (every field, none interactive, no listener), the table and its actions kept, no Save, Revert, Reset, unsaved line or launch checkbox; a key saved from a line reaching the file's `.env`. `tests/ui/test_config_page.py`: Setup and Secrets only, Save writing the file, Revert reading it again, no Reset.
 - `tests/ui/test_report.py`: the wording of every report: each status and its explanation, the transient states, the summary.
 
-Behaviour in a browser is not covered by the fast tier: gradio's client cannot drive the per-browser draft. `tests-e2e/test_panels_in_browser.py` drives the panels in headless Chromium (Playwright, skipped when absent), inside an app's page where they are not the first tab: switch module, type a required field, save; switch back, pick a voice from the list, save; the saved file is checked each time. Then one item is prepared from its row, its progress shown on that row, and it turns ready while the other stays not prepared. Then the Secrets panel lists the key the unsaved draft names, and Save is disabled while the app's session runs and enabled once it stops. A value typed shows "Unsaved changes", which Save takes away; a key saved in the Secrets panel turns its line ready on the Setup panel without a click on Check. An extra is installed from its line (the installer faked), its line showing Installing… then Ready; a key is saved from its line, which turns ready. It found that the form's fields were not interactive, and that a value typed right after a module switch was lost.
+Behaviour in a browser is not covered by the fast tier: gradio's client cannot drive the per-browser draft. `tests-e2e/test_panels_in_browser.py` drives the panels in headless Chromium (Playwright, skipped when absent), inside an app's page where they are not the first tab: switch module, type a required field, save; switch back, pick a voice from the list, save; the saved file is checked each time. Then one item is prepared from its row, its progress shown on that row, and it turns ready while the other stays not prepared. Then the Secrets panel lists the key the unsaved draft names, and Save is disabled while the app's session runs and enabled once it stops. A value typed shows "Unsaved changes", which Save takes away; a key saved in the Secrets panel turns its line ready on the Setup panel without a click on Check. An extra is installed from its line (the installer faked), its line showing Installing… then Ready; a key is saved from its line, which turns ready. Over a file: a config app switches module, types, saves (the file holds the library's document alone) and reverts to a hand edit; an app running a file shows its form disabled, no Revert, Reset or list button, and installs an extra from its line, the file left unchanged. It found that the form's fields were not interactive, and that a value typed right after a module switch was lost.
 
 ## Open questions
 

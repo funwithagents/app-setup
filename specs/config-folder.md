@@ -11,14 +11,14 @@ tests:
 
 ## Purpose
 
-An app runs from a folder, not from a config file. The folder holds what the Setup panel saves and the app runs with, and its secrets, so that relaunching the app finds everything as it was left.
+An app runs from a folder or from a file ([config-file.md](config-file.md)). The folder holds what the Setup panel saves and the app runs with, and its secrets, so that relaunching the app finds everything as it was left.
 
 ## The files
 
 | File | Holds |
 |---|---|
-| `config.json` | The current config: one key per section, each holding that library's own document |
-| `.env` | The secrets ([secrets.md](secrets.md)) |
+| `config.json` | The current config: one key per section, each holding that library's own document; for a bare app (`App(bare=True)`, [config-file.md](config-file.md)), its one section's document as it is, with no key around it |
+| `.env` | The secrets ([secrets.md](secrets.md)), unless the app is given another `.env` (`--env PATH`) |
 | `launch.json` | Whether the app starts its session at launch, for an app with autostart (`{"autostart": bool}`), written once the user chooses ([autostart.md](autostart.md)); apart from the config, so the config stays the app's own sections |
 
 The app may keep files of its own in the folder (its settings, such as whether to start a session at launch); app-setup never reads, writes or removes them.
@@ -29,15 +29,17 @@ Files are written whole and replaced in one step (a temporary file renamed over 
 
 ## Where the folder is
 
-The app chooses it, typically from a `--folder` option of its own. `default_folder(name)` is the usual default: `$XDG_CONFIG_HOME/<name>`, or `~/.config/<name>` when the variable is unset, on every platform: one rule, no platform-specific directory to look up.
+The app chooses it, typically from the `--folder` option `app_setup.launch` gives every app ([config-file.md](config-file.md), "The command line"). `default_folder(name)` is the usual default: `$XDG_CONFIG_HOME/<name>`, or `~/.config/<name>` when the variable is unset, on every platform: one rule, no platform-specific directory to look up.
 
 ## API
 
 ```python
 class ConfigFolder:
-    def __init__(self, path: Path, default_config: Mapping[str, Any]) -> None: ...
-    config_path: Path; env_path: Path
-    default_config: dict          # a copy
+    def __init__(self, path: Path, default_config: Mapping[str, Any], *, env_path: Path | None = None) -> None: ...
+    config_path: Path; env_path: Path   # env_path: DIR/.env unless given
+    base_dir: Path                      # the folder: where relative paths resolve
+    writable: bool; resettable: bool    # both true: Save writes config.json, Reset the default
+    default_config: dict                # a copy
     def ensure(self) -> None: ...
     def read_config(self) -> dict: ...
     def save_config(self, config: Mapping) -> None: ...
@@ -52,7 +54,7 @@ The folder does not validate the config: an invalid config can be saved, and the
 
 ## Testing
 
-`tests/test_folder.py`: the first launch writes the default config and leaves the app's own files alone; a saved config survives a relaunch and reset goes back; the default cannot be changed through what is returned; unreadable files name themselves; `XDG_CONFIG_HOME` is followed.
+`tests/test_folder.py`: the first launch writes the default config and leaves the app's own files alone; a saved config survives a relaunch and reset goes back; the default cannot be changed through what is returned; unreadable files name themselves; `XDG_CONFIG_HOME` is followed; the `.env` is the folder's unless another is given.
 
 ## Open questions
 

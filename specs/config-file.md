@@ -5,19 +5,23 @@ code:
   - src/app_setup/app.py
   - src/app_setup/autostart.py
   - src/app_setup/launch.py
+  - src/app_setup/ui/form.py
   - src/app_setup/ui/panels.py
   - src/app_setup/ui/config_page.py
 tests:
   - tests/test_config_file.py
   - tests/test_launch.py
+  - tests/test_app.py
+  - tests/test_folder.py
   - tests/test_autostart.py
   - tests/ui/test_panels.py
   - tests/ui/test_config_page.py
+  - tests-e2e/test_panels_in_browser.py
 ---
 
 # Config file
 
-**Status:** Stable
+**Status:** Implemented
 
 ## Purpose
 
@@ -167,13 +171,15 @@ An app that already has a page (and a session) may instead offer its own command
 
 ## Changes to the other specs, once this one is Stable
 
+Made, with the plan that built this spec ([plans/202611251512_config-file.md](../plans/202611251512_config-file.md)):
+
 - [config-folder.md](config-folder.md): `env_path` given or `DIR/.env`; `base_dir`, `writable`, `resettable`; "An app runs from a folder" becomes "from a folder or a file"; `config.json` holds a bare app's document as it is.
 - [app.md](app.md): `App(bare=True)` and its wrapping; `AppModel(app, source, …)`, `source`, `editable`; `reset` refused for a source without a default.
 - [autostart.md](autostart.md): the file rule in `starts_at_launch`; no checkbox without launch settings.
 - [secrets.md](secrets.md): the `.env` is the source's (next to the config, or `--env`).
 - [ui.md](ui.md): the read-only Setup panel; `config_page`.
 
-Each moves to **Updated** with that change, and back to **Implemented** with the plan that builds it.
+Each spec's text changed in the same change as its code, so each stays **Implemented**.
 
 ## Open questions
 
