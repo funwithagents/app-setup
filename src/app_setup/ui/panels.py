@@ -13,11 +13,13 @@ from __future__ import annotations
 
 import copy
 import html
+import importlib.util
 import itertools
 import re
+import sys
 import threading
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -31,7 +33,6 @@ from app_setup.ui.report import (
     HEADER,
     Progress,
     config_report,
-    config_summary,
     env_file_rows,
     item_status,
     secrets_report,
@@ -85,6 +86,44 @@ REQUIRED = (
 )
 
 
+def _guard_matplotlib() -> None:
+    """Keep gradio's per-event matplotlib switch from tripping over an install.
+
+    gradio wraps every event in ``gradio.utils.MatplotlibBackendMananger``: on entering, it
+    imports matplotlib if it can and records its backend; on leaving, it imports it again
+    and restores that backend. An install from the panel can bring matplotlib in while the
+    app runs (a library's extra depends on it). Then the first event after it imports a
+    matplotlib that has never run here, whose ``get_backend`` builds its font cache in
+    gradio's event loop: the whole server stalls for seconds (no tick, no line updated).
+    And an event open while it lands enters without it and leaves with it, fails on the
+    backend it never recorded, and its outputs are lost (a section's check after an
+    install, its new lines with them). Found driving a real install of an extra pulling
+    torch and transformers.
+
+    Guarded: a matplotlib importable when the panel was built, or already imported, is
+    switched as gradio does; one installed since is left alone until something imports
+    it; and leaving restores only what entering recorded. Installed once per process."""
+    from gradio import utils
+
+    original = utils.MatplotlibBackendMananger
+    if getattr(original, "_app_setup_guard", False):
+        return
+    present_at_start = importlib.util.find_spec("matplotlib") is not None
+
+    class Guarded(original):  # type: ignore[misc, valid-type]
+        _app_setup_guard = True
+
+        def __enter__(self) -> None:
+            if present_at_start or "matplotlib" in sys.modules:
+                super().__enter__()
+
+        def __exit__(self, *exc: object) -> None:
+            if hasattr(self, "_original_backend"):
+                super().__exit__(*exc)
+
+    utils.MatplotlibBackendMananger = Guarded  # type: ignore[misc]
+
+
 def unsaved_notice(model: AppModel, draft: Config) -> str:
     """For the app's own session view, given a Setup panel's ``draft``: a line saying the
     draft has unsaved changes and Start uses the saved config, or "" (nothing to say, or
@@ -132,6 +171,11 @@ class _Run:
     lines: list[str] = field(default_factory=list)  # uv's output, for Install all
     ok: bool | None = None  # None while it runs
     done: threading.Event = field(default_factory=threading.Event)
+    # An install ended well, shown so on its lines: its section is checked again at the
+    # rows' next tick. Two steps, because that first check after an install imports the
+    # library just installed, which can hold the process for seconds: the lines say what
+    # is happening before it starts.
+    shown: bool = False
 
     def progress(self) -> Progress:
         return Progress(
@@ -154,6 +198,11 @@ class _Actions:
     model: AppModel
     runs: dict[tuple[str, str], _Run] = field(default_factory=dict)
     busy: set[str] = field(default_factory=set)
+    # Each section's Install all running or just ended, with its extras: its output box
+    # follows it on the rows' timer.
+    section_installs: dict[str, tuple[_Run, tuple[str, ...]]] = field(
+        default_factory=dict
+    )
     lock: threading.Lock = field(default_factory=threading.Lock)
     # Held by the install running: the others wait their turn.
     installing: threading.Lock = field(default_factory=threading.Lock)
@@ -230,14 +279,34 @@ class _Actions:
             return run.progress() if run is not None else None
 
     def any_running(self) -> bool:
-        """Whether a line of any section is being acted on: the rows' timer runs then."""
+        """Whether a line of any section is being acted on, or an install ended well
+        waits for its section's check: the rows' timer runs then."""
         with self.lock:
-            return any(run.ok is None for run in self.runs.values())
+            return any(
+                run.ok is None or (run.install and run.ok is True)
+                for run in self.runs.values()
+            )
+
+    def mark_shown(self, item: SetupItem) -> None:
+        """The end of *item*'s install has been shown on its line."""
+        with self.lock:
+            run = self.runs.get((item.section, item.id))
+            if run is not None and run.ok is not None:
+                run.shown = True
 
     def running(self, section: str) -> bool:
         with self.lock:
             return any(
                 key[0] == section and run.ok is None for key, run in self.runs.items()
+            )
+
+    def installed(self, section: str) -> bool:
+        """Whether an install of one of the section's lines ended well since its last
+        check: the section is checked again then (what it needs may have changed)."""
+        with self.lock:
+            return any(
+                key[0] == section and run.install and run.ok is True and run.shown
+                for key, run in self.runs.items()
             )
 
     def forget_finished(self, section: str) -> None:
@@ -490,26 +559,20 @@ def _wire_table(
                 return (gr.skip(),) * (3 + len(checks))
             if action == "prepare":
                 actions.start(config, item)
-                status, explanation, state = _line(actions, item)
-                return (
-                    _cells(item.title, status, explanation),
-                    gr.update(**state),
-                    *skipped,
-                    gr.Timer(active=True),
-                )
-            run = actions.install([item], item.host_extras[:1])
-            if run is None:
+            elif actions.install([item], item.host_extras[:1]) is None:
                 return (gr.skip(),) * (3 + len(checks))
-            run.done.wait()
-            # Installed: the section checked again. Failed: the line keeps its error.
+            # Started, on its own thread: the line shows it, and the rows' timer follows
+            # it to its end. An install is never waited for here: an event open while
+            # packages land can be lost (`_guard_matplotlib`), and the section is checked
+            # again by the rows' timer once it has ended well.
+            status, explanation, state = _line(actions, item)
             return (
-                *((gr.skip(),) * 2),
-                *(reports(config) if run.ok else skipped),
-                gr.skip(),
+                _cells(item.title, status, explanation),
+                gr.update(**state),
+                *skipped,
+                gr.Timer(active=True),
             )
 
-        # Install waits for its run: the rows' timer is turned on by the panel's own
-        # one-second tick, which sees an action running.
         row.button.click(
             on_button,
             inputs=[checked, draft],
@@ -543,34 +606,54 @@ def _wire_table(
 
 
 def _follow_rows(
-    actions: _Actions, sections: Sequence[_Section], timer: gr.Timer
+    actions: _Actions,
+    sections: Sequence[_Section],
+    draft: gr.State,
+    timer: gr.Timer,
 ) -> None:
     """The rows' *timer*, one for the whole panel, on only while a line is being acted on:
     each tick sends the lines with an action (a preparation's progress, an install's latest
-    words, how it ended) and nothing else, then turns itself off once none runs. An idle
-    panel sends no event for its rows: each event costs the browser a pass over the page."""
+    words, how it ended) and a section's Install all output, and nothing else; once an
+    install of a section's line has ended well, it checks that section again (what it
+    needs may have changed: new lines, a library now importing); then it turns itself off
+    once none runs. An idle panel sends no event for its rows: each event costs the
+    browser a pass over the page."""
 
-    def on_rows_tick(*checked: tuple[SetupItem, ...]) -> list[Any]:
+    def on_rows_tick(config: Config, *checked: tuple[SetupItem, ...]) -> list[Any]:
         updates: list[Any] = []
-        for items in checked:
-            for index in range(_ROWS):
-                item = items[index] if index < len(items) else None
-                if item is None or actions.progress(item) is None:
-                    updates += [gr.skip()] * 2
-                    continue
-                status, explanation, state = _line(actions, item)
-                updates += [_cells(item.title, status, explanation), gr.update(**state)]
+        for section, items in zip(sections, checked, strict=True):
+            if actions.installed(section.name):
+                # Its rows are drawn again from the new check (`checked.change`).
+                updates += [gr.skip()] * (2 * _ROWS)
+                updates += section.reports(config)
+            else:
+                for index in range(_ROWS):
+                    item = items[index] if index < len(items) else None
+                    if item is None or actions.progress(item) is None:
+                        updates += [gr.skip()] * 2
+                        continue
+                    status, explanation, state = _line(actions, item)
+                    updates += [
+                        _cells(item.title, status, explanation),
+                        gr.update(**state),
+                    ]
+                    actions.mark_shown(item)
+                updates += [gr.skip()] * len(section.checks)
+            updates.append(_install_box(actions, section.name))
         return [*updates, gr.Timer(active=actions.any_running())]
 
     timer.tick(
         on_rows_tick,
-        inputs=[section.checked for section in sections],
+        inputs=[draft, *(section.checked for section in sections)],
         outputs=[
             *(
                 component
                 for section in sections
-                for row in section.table.rows
-                for component in (row.cells, row.button)
+                for component in (
+                    *(c for row in section.table.rows for c in (row.cells, row.button)),
+                    *section.checks,
+                    section.output,
+                )
             ),
             timer,
         ],
@@ -578,14 +661,28 @@ def _follow_rows(
     )
 
 
+def _install_box(actions: _Actions, section: str) -> Any:
+    """A section's output box while its Install all runs, and once more when it ends."""
+    with actions.lock:
+        entry = actions.section_installs.get(section)
+    if entry is None:
+        return gr.skip()
+    run, extras = entry
+    done = run.ok is not None
+    if done:
+        with actions.lock:
+            actions.section_installs.pop(section, None)
+    return gr.update(value=_install_text(actions, run, extras, done=done), visible=True)
+
+
 # The least width of a fold's two columns (the form, the checks): narrower, they stack,
 # the form first.
 _COLUMN_MIN = 420
 
-# What a section's last check says of it, for the whole config's line: its title, whether
-# it needs something (a problem, a required item missing), its optional items missing. None
-# for a section the config does not use.
-Status = tuple[str, bool, int] | None
+# What a tab shows of the sections: for each, whether the config uses it and whether it is
+# an optional section left out (its "off" line). Kept per browser tab, so a change of
+# structure in one section shows or hides only the others it changes (`when`).
+Layout = dict[str, tuple[bool, bool]]
 
 
 @dataclass(frozen=True)
@@ -594,6 +691,14 @@ class _Section:
     line offering to add it; what the panel's own events update."""
 
     name: str
+    # Bumped by a change of structure in this section alone (a module switched, an optional
+    # object toggled, a choice from a list, Add, Remove): its form is drawn again and it
+    # alone checked. A hidden number, for the reason the panel's revision is one.
+    revision: gr.Number
+    # The panel-wide revision this tab last redrew the section for, and whether its fold
+    # was set as the section first showed (then left to the user).
+    seen: gr.State
+    opened: gr.State
     # The fold: its label is the section's line, it is shown while the config uses it.
     fold: gr.Accordion
     # An optional section's "<title> — off" line (with Add on an editable panel); None for
@@ -603,20 +708,20 @@ class _Section:
     summary_md: gr.Markdown
     # The section's items, from its last check: its table shows them (`checked.change`).
     checked: gr.State
-    # What its last check says, for the whole config's line (`status.change`).
-    status: gr.State
     output: gr.Textbox
     buttons: tuple[gr.Button, ...]
     table: _Table
-    # The section's problems, its summary, its items, its fold's line and its status, for
-    # a config: in `checks`' order.
+    # The section's problems, its summary, its items and its fold's line, for a config: in
+    # `checks`' order.
     reports: Callable[[Config], tuple[Any, ...]]
+    # The same, and whether the section needs something (its fold opened at first).
+    check: Callable[[Config], tuple[tuple[Any, ...], bool]]
 
     @property
     def checks(self) -> tuple[Any, ...]:
         """What a check of the section updates: its problems, its summary, its table, its
-        fold's line, its status."""
-        return self.config_md, self.summary_md, self.checked, self.fold, self.status
+        fold's line."""
+        return self.config_md, self.summary_md, self.checked, self.fold
 
 
 def _section_block(
@@ -654,24 +759,29 @@ def _section_block(
             title, modules, items, problems, installed=description is not None
         )
 
-    def reports(config: Config) -> tuple[Any, ...]:
-        """The section's problems, its summary, its items for the table, its fold's line
-        and its status."""
+    def check_section(config: Config) -> tuple[tuple[Any, ...], bool]:
+        """The section's problems, its summary, its items for the table and its fold's
+        line; and whether it needs something (a problem, a required item missing)."""
         problems = model.check_config(config, [name])
         items = model.check_setup(config, [name])
         actions.forget_finished(name)
         needs = bool(problems) or any(item.blocking for item in items)
-        status: Status = (title, needs, sum(1 for item in items if item.deferred))
         return (
             config_report(problems),
             setup_summary(items),
             tuple(items),
             gr.update(label=line(config, problems, items)),
-            status,
-        )
+        ), needs
+
+    def reports(config: Config) -> tuple[Any, ...]:
+        return check_section(config)[0]
 
     # Bumped by each field of the section the user is done with: checked again then.
     edited = gr.State(0)
+    # The section's own revision (`_Section.revision`).
+    own = gr.Number(0, precision=0, visible=False)
+    seen = gr.State(0)
+    opened = gr.State(False)
 
     # The class lets a page (or a test) find a section's fold.
     with gr.Accordion(
@@ -685,21 +795,26 @@ def _section_block(
             with gr.Column(scale=1, min_width=_COLUMN_MIN):
                 gr.Markdown("#### Settings")
 
+                # Drawn again on a panel-wide change (the page loaded, Revert, Reset) and on
+                # one of this section's own: never for another section's.
                 @gr.render(
-                    inputs=[draft, revision], triggers=[revision.change], **_RENDERS
+                    inputs=[draft, revision],
+                    triggers=[revision.change, own.change],
+                    **_RENDERS,
                 )
                 def form(config: Config, loaded: int) -> None:
                     # gradio also runs a render as the page loads, before the draft is
                     # read: a form drawn then is replaced at once, and a click on it would
                     # reach listeners the server has already dropped. Drawn from the
-                    # loaded draft only.
-                    if loaded:
+                    # loaded draft only, and only for a section the config uses (Add, or
+                    # a `when` turning true, draws it then).
+                    if loaded and name in model.used(config):
                         render_section(
                             model,
                             name,
                             config,
                             draft,
-                            revision,
+                            own,
                             edited,
                             readonly=readonly,
                         )
@@ -734,8 +849,6 @@ def _section_block(
             if section.optional and not readonly
             else None
         )
-    status = gr.State(None)
-
     off = None
     add = None
     if section.optional:
@@ -746,7 +859,7 @@ def _section_block(
             add = gr.Button("Add", scale=0) if not readonly else None
 
     buttons = (check, install_all, prepare_all, probe)
-    checks = (config_md, summary_md, checked, fold, status)
+    checks = (config_md, summary_md, checked, fold)
     _wire_table(model, actions, table, draft, checked, checks, reports, timer)
     skipped = (gr.skip(),) * len(checks)
 
@@ -758,12 +871,13 @@ def _section_block(
                 kept = {**kept, name: copy.deepcopy(document)}
             return model.remove_section(config, name), rev + 1, kept
 
-        # A draft edit, as a module switched: the panel redraws (`on_redraw`), the fold
-        # hidden and the Add line shown; the document kept in this tab for Add.
+        # A draft edit of this section alone, as a module switched: it redraws
+        # (`on_section_redraw`), the fold hidden and the Add line shown; the document kept
+        # in this tab for Add.
         remove.click(
             on_remove,
-            inputs=[draft, revision, removed],
-            outputs=[draft, revision, removed],
+            inputs=[draft, own, removed],
+            outputs=[draft, own, removed],
             show_progress="hidden",
         )
 
@@ -779,8 +893,8 @@ def _section_block(
 
         add.click(
             on_add,
-            inputs=[draft, revision, removed],
-            outputs=[draft, revision, removed, fold],
+            inputs=[draft, own, removed],
+            outputs=[draft, own, removed, fold],
             show_progress="hidden",
         )
 
@@ -808,29 +922,38 @@ def _section_block(
         on_check, inputs=[draft], outputs=list(checks)
     ).then(on_free, outputs=list(buttons))
 
-    def on_install_all(config: Config) -> Iterator[tuple[Any, ...]]:
+    def on_install_all(config: Config) -> tuple[Any, ...]:
         items = [i for i in model.check_setup(config, [name]) if i.installable]
-        extras = list(dict.fromkeys(i.host_extras[0] for i in items))
+        extras = tuple(dict.fromkeys(i.host_extras[0] for i in items))
         if not extras:
-            yield shown("No missing extra the host can install."), *reports(config)
-            return
+            return (
+                shown("No missing extra the host can install."),
+                *reports(config),
+                gr.skip(),
+            )
         run = actions.install(items, extras)
         if run is None:
-            yield shown("One of these extras is being installed already."), *skipped
-            return
-        for text in _install_output(actions, run, extras):
-            yield shown(text), *skipped
-        # Installed: the section checked again. Failed: the lines keep the error.
-        yield (
-            shown(_install_text(actions, run, extras, done=True)),
-            *(reports(config) if run.ok else skipped),
+            return (
+                shown("One of these extras is being installed already."),
+                *skipped,
+                gr.skip(),
+            )
+        # Started: its lines and this box follow it on the rows' timer, which checks the
+        # section again once it has ended well. Never waited for here (`on_button`).
+        with actions.lock:
+            actions.section_installs[name] = (run, extras)
+        return (
+            shown(_install_text(actions, run, extras, done=False)),
+            *skipped,
+            gr.Timer(active=True),
         )
 
-    install_all.click(on_busy, outputs=list(buttons)).then(
+    install_all.click(
         on_install_all,
         inputs=[draft],
-        outputs=[output, *checks],
-    ).then(on_free, outputs=list(buttons))
+        outputs=[output, *checks, timer],
+        show_progress="hidden",
+    )
 
     def on_prepare_all(config: Config) -> Any:
         for item in model.to_prepare(config, [name]):
@@ -862,27 +985,27 @@ def _section_block(
 
     return _Section(
         name,
+        own,
+        seen,
+        opened,
         fold,
         off,
         config_md,
         summary_md,
         checked,
-        status,
         output,
         buttons,
         table,
         reports,
+        check_section,
     )
 
 
-def _probe_line(
-    model: AppModel, config: Config, name: str, titled: bool = False
-) -> str:
-    """A section's Test, in one line; *titled*: its title first (Test all's lines)."""
+def _probe_line(model: AppModel, config: Config, name: str) -> str:
+    """A section's Test, in one line."""
     result = model.probe(config, name)
     mark = "✅" if result.get("ok") else "❌"
-    head = f"{mark} {model.section_title(name)}:" if titled else mark
-    return f"{head} {result.get('message', '')} ({result.get('duration_s', 0):.1f} s)"
+    return f"{mark} {result.get('message', '')} ({result.get('duration_s', 0):.1f} s)"
 
 
 def _install_text(
@@ -896,142 +1019,117 @@ def _install_text(
         return "\n".join([heading, *waiting, *run.lines, *end]).rstrip()
 
 
-def _install_output(
-    actions: _Actions, run: _Run, extras: Sequence[str]
-) -> Iterator[str]:
-    """An Install all's output box while it runs, five times a second."""
-    while not run.done.wait(0.2):
-        yield _install_text(actions, run, extras, done=False)
-
-
-def _unfold(open: SectionOpen, opened: bool, status: Status) -> dict[str, Any]:
-    """Whether a used section's fold is opened, as a fold update: as the section's *open*
-    says when the page loads (*opened* still false), then left to the user."""
-    if opened:
-        return {}
+def _unfold(open: SectionOpen, needs: bool) -> dict[str, Any]:
+    """A section's fold as it first shows, as a fold update: as its *open* says."""
     if open == "needs":
-        return {"open": bool(status and status[1])}
+        return {"open": needs}
     return {"open": open == "always"}
 
 
-def _overview(
+def _layout(model: AppModel, config: Config) -> Layout:
+    """For each section: whether *config* uses it, and whether it is an optional section
+    left out. Cheap: the sections' `when` only, nothing imported or checked."""
+    used = set(model.used(config))
+    off = set(model.optional_off(config))
+    return {
+        section.name: (section.name in used, section.name in off)
+        for section in model.app.sections
+    }
+
+
+def _wire_redraws(
     model: AppModel,
-    actions: _Actions,
     sections: Sequence[_Section],
     draft: gr.State,
-    buttons: tuple[gr.Button, gr.Button, gr.Button, gr.Button],
-    summary_md: gr.Markdown,
-    output: gr.Textbox,
-    timer: gr.Timer,
+    revision: gr.Number,
+    layout: gr.State,
 ) -> None:
-    """The whole config's actions, wired: Check all, Install all (one uv run for every
-    section), Prepare all (every section's items, side by side) and Test all (one line per
-    section), acting on every section the config uses as each section's own buttons act on
-    one; and its summary line, following each section's status."""
-    check_all, install_all, prepare_all, test_all = buttons
-    checks = [component for section in sections for component in section.checks]
+    """Each section redrawn on its own: on a panel-wide change (the page loaded, Revert,
+    Reset) and on a change of its own structure, it shows or hides its fold and its "off"
+    line, checks itself if used and clears its output. A change of its own also passes over
+    the other sections, cheaply: those whose use changed (a `when` reading this section's
+    values) are shown or hidden, and one newly used gets its own revision bumped, so it
+    alone is drawn and checked. No section is checked, nor its form drawn, for another's
+    change."""
+    revisions = [section.revision for section in sections]
+    for index, section in enumerate(sections):
+        others = [other for other in sections if other is not section]
+        name = section.name
+        open_setting = model.section(name).open
 
-    def every_check(config: Config, names: Sequence[str]) -> list[Any]:
-        """Each section's checks: those of *names* run, the others left as they are."""
-        out: list[Any] = []
-        for section in sections:
-            if section.name in names:
-                out += section.reports(config)
+        def on_section_redraw(
+            config: Config,
+            rev: int,
+            seen: int,
+            opened: bool,
+            shown: Layout | None,
+            *revs: int,
+            name: str = name,
+            section: _Section = section,
+            others: list[_Section] = others,
+            index: int = index,
+            open_setting: SectionOpen = open_setting,
+        ) -> list[Any]:
+            now = _layout(model, config)
+            used, off = now[name]
+            # A panel-wide change redraws every section itself; a change of this one's
+            # may change which of the others are used.
+            panel_wide = rev != seen
+            if used:
+                reports, needs = section.check(config)
+                *reports, fold = reports
+                # As the page loads, the fold is set as the section says; afterwards it is
+                # the user's (Add opens its own).
+                first = panel_wide and not opened
+                unfold = _unfold(open_setting, needs) if first else {}
+                reports = [*reports, {**fold, "visible": True, **unfold}]
             else:
-                out += [gr.skip()] * len(section.checks)
-        return out
-
-    def shown(text: str) -> Any:
-        return gr.update(value=text, visible=True)
-
-    def busy(on: bool) -> list[Any]:
-        """Every section busy (its lines disabled) while a whole-config action runs, and
-        the whole config's buttons with them."""
-        for section in sections:
-            if on:
-                actions.busy.add(section.name)
-            else:
-                actions.busy.discard(section.name)
-        return [gr.update(interactive=not on) for _ in buttons]
-
-    def on_overview_busy() -> list[Any]:
-        return busy(True)
-
-    def on_overview_free() -> list[Any]:
-        return busy(False)
-
-    def on_overview_check(config: Config) -> list[Any]:
-        return every_check(config, model.used(config))
-
-    check_all.click(on_overview_busy, outputs=list(buttons)).then(
-        on_overview_check, inputs=[draft], outputs=checks
-    ).then(on_overview_free, outputs=list(buttons))
-
-    def on_overview_install(config: Config) -> Iterator[list[Any]]:
-        names = model.used(config)
-        skipped = [gr.skip()] * len(checks)
-        items = [i for i in model.check_setup(config, names) if i.installable]
-        extras = list(dict.fromkeys(i.host_extras[0] for i in items))
-        if not extras:
-            yield [
-                shown("No missing extra the host can install."),
-                *every_check(config, names),
+                reports = ["", "", (), gr.update(visible=False)]
+            out: list[Any] = [
+                *reports,
+                gr.update(value="", visible=False),
+                *([gr.update(visible=off)] if section.off is not None else []),
+                rev,
+                opened or (used and panel_wide),
             ]
-            return
-        run = actions.install(items, extras)
-        if run is None:
-            yield [shown("One of these extras is being installed already."), *skipped]
-            return
-        for text in _install_output(actions, run, extras):
-            yield [shown(text), *skipped]
-        # Installed: every section checked again. Failed: the lines keep the error.
-        yield [
-            shown(_install_text(actions, run, extras, done=True)),
-            *(every_check(config, names) if run.ok else skipped),
-        ]
+            before = shown or {}
+            own_revs = [r for i, r in enumerate(revs) if i != index]
+            for other, other_rev in zip(others, own_revs, strict=True):
+                was, is_ = before.get(other.name), now[other.name]
+                if panel_wide or was is None or was == is_:
+                    out += [gr.skip()] * (2 + (other.off is not None))
+                    continue
+                newly_used = is_[0] and not was[0]
+                out += [
+                    gr.update(visible=is_[0]) if not newly_used else gr.skip(),
+                    *([gr.update(visible=is_[1])] if other.off is not None else []),
+                    other_rev + 1 if newly_used else gr.skip(),
+                ]
+            return [*out, now]
 
-    install_all.click(on_overview_busy, outputs=list(buttons)).then(
-        on_overview_install, inputs=[draft], outputs=[output, *checks]
-    ).then(on_overview_free, outputs=list(buttons))
-
-    def on_overview_prepare(config: Config) -> Any:
-        for item in model.to_prepare(config):
-            actions.start(config, item)
-        return gr.Timer(active=True)
-
-    prepare_all.click(
-        on_overview_prepare, inputs=[draft], outputs=[timer], show_progress="hidden"
-    )
-
-    def on_overview_test(config: Config) -> Iterator[Any]:
-        lines: list[str] = []
-        for name in model.used(config):
-            lines.append(_probe_line(model, config, name, titled=True))
-            yield shown("\n".join(lines))
-        if not lines:
-            yield shown("No section to test.")
-
-    test_all.click(on_overview_busy, outputs=list(buttons)).then(
-        on_overview_test, inputs=[draft], outputs=[output]
-    ).then(on_overview_free, outputs=list(buttons))
-
-    def on_summary(*statuses: Status) -> str:
-        known = [status for status in statuses if status is not None]
-        if not known:
-            return ""
-        needing = [title for title, needs, _ in known if needs]
-        return config_summary(needing, sum(deferred for _, _, deferred in known))
-
-    # Each section's status changes only when its check finds otherwise: the line follows
-    # every check, without an event of its own for a check that changes nothing.
-    gr.on(
-        [section.status.change for section in sections],
-        on_summary,
-        inputs=[section.status for section in sections],
-        outputs=[summary_md],
-        show_progress="hidden",
-        trigger_mode="always_last",
-    )
+        gr.on(
+            [revision.change, section.revision.change],
+            on_section_redraw,
+            inputs=[draft, revision, section.seen, section.opened, layout, *revisions],
+            outputs=[
+                *section.checks,
+                section.output,
+                *([section.off] if section.off is not None else []),
+                section.seen,
+                section.opened,
+                *(
+                    component
+                    for other in others
+                    for component in (
+                        other.fold,
+                        *([other.off] if other.off is not None else []),
+                        other.revision,
+                    )
+                ),
+                layout,
+            ],
+            show_progress="hidden",
+        )
 
 
 @dataclass(frozen=True)
@@ -1168,33 +1266,36 @@ def _saving(
 
 def setup_panel(model: AppModel) -> SetupPanel:
     """Draw the Setup panel of *model*'s app here: for an app with autostart, its launch
-    choice, saved at once; then the config: the whole config's Check all, Install all,
-    Prepare all and Test all with its summary line; one fold per section the config uses,
-    titled with its line (its modules, its status), open at page load as the section's
-    `open` says (by default, when it needs something): inside, its form beside its own checks — Check, Install all, Prepare all,
-    Test — trying the draft, and a table of what it needs, a line per item with its own
-    action; an optional section's Remove, or its "off" line with Add; and at the bottom
-    Save, Revert and Reset for the whole config (Reset only for a source with a default),
-    a line saying when the draft differs from the saved config at the top and next to Save.
+    choice, saved at once; then the config: one fold per section the config uses, titled
+    with its line (its modules, its status), open as it first shows as the section's
+    `open` says (by default, when it needs something): inside, its settings (the form,
+    then the config's problems) beside what the machine has for it (its status, a table
+    of what it needs, a line per item with its own action, its own Check, Install all,
+    Prepare all, Test), trying the draft; an optional section's Remove, or its "off" line
+    with Add; and at the bottom Save, Revert and Reset for the whole config (Reset only for
+    a source with a default), a line saying when the draft differs from the saved config at
+    the top and next to Save.
 
     For a model that is not editable (an app running a file as it is): a line naming the
     file, each section's form read-only, its checks and their actions as always, and
     nothing to save: no Save, Revert or Reset, no unsaved line, no launch choice."""
+    _guard_matplotlib()
     editable = model.editable
     source = model.source
     draft = gr.State({})
-    # Bumped on each change of the form's structure: the forms are drawn again then. A hidden
-    # number, not a `gr.State`: in a tab other than the first, gradio fires a State's change
-    # twice as the page loads (once more as the tab mounts), so the form was drawn twice
-    # and a click on the first drawing reached listeners the second had dropped.
+    # Bumped on a panel-wide change (the page loaded, Revert, Reset): every form is drawn
+    # again and every section checked. A change of structure inside one section bumps that
+    # section's own revision only (`_Section.revision`). A hidden number, not a
+    # `gr.State`: in a tab other than the first, gradio fires a State's change twice as
+    # the page loads (once more as the tab mounts), so the form was drawn twice and a
+    # click on the first drawing reached listeners the second had dropped.
     revision = gr.Number(0, precision=0, visible=False)
     saved = gr.State(0)
     # The last `SecretStore.revision` this tab saw: when it changes (a key saved or
     # removed, from any tab), the sections are checked again.
     secrets_seen = gr.State(None)
-    # Whether this tab's folds were opened or folded as the page loaded: once, then the
-    # user's.
-    unfolded = gr.State(False)
+    # Which sections this tab shows (`Layout`): a section's own change compares with it.
+    layout = gr.State(None)
     # The documents of the optional sections removed in this tab: Add puts them back.
     removed = gr.State({})
 
@@ -1222,9 +1323,6 @@ def setup_panel(model: AppModel) -> SetupPanel:
     gr.Markdown(REQUIRED)
     unsaved_top = gr.Markdown() if editable else None
 
-    # The whole config's line, over the folds.
-    overview_md = gr.Markdown()
-
     # The item rows' progress, on a timer of their own (sharing the lock line's stopped the
     # lock line updating in the browser), off until a line is acted on (`_follow_rows`).
     rows_timer = gr.Timer(0.5, active=False)
@@ -1243,31 +1341,9 @@ def setup_panel(model: AppModel) -> SetupPanel:
         )
         for section in model.app.sections
     ]
-    _follow_rows(actions, sections, rows_timer)
+    _follow_rows(actions, sections, draft, rows_timer)
 
-    # The whole config's actions, after the folds and just above Save: shown only while
-    # the config uses two sections or more (with one, they would repeat its own).
-    with gr.Column(
-        visible=len(model.used(initial)) > 1, elem_classes=["app-setup-all"]
-    ) as overview:
-        with gr.Row():
-            check_all = gr.Button("Check all", scale=0)
-            install_everything = gr.Button("Install all", scale=0)
-            prepare_everything = gr.Button("Prepare all", scale=0)
-            test_all = gr.Button("Test all", scale=0)
-        overview_output = gr.Textbox(
-            label="Output", lines=6, max_lines=20, interactive=False, visible=False
-        )
-    _overview(
-        model,
-        actions,
-        sections,
-        draft,
-        (check_all, install_everything, prepare_everything, test_all),
-        overview_md,
-        overview_output,
-        rows_timer,
-    )
+    _wire_redraws(model, sections, draft, revision, layout)
 
     # The config is kept last, after the sections it is tried in: Save, Revert, Reset, and
     # the lines the tick keeps current (the lock, Save and Reset with it, the unsaved
@@ -1303,52 +1379,6 @@ def setup_panel(model: AppModel) -> SetupPanel:
 
         # `input`: the user's change only, not the value set on page load.
         autostart.input(on_autostart, inputs=[autostart], outputs=[launch_notice])
-
-    def on_redraw(config: Config, opened: bool) -> list[Any]:
-        used = set(model.used(config))
-        off = set(model.optional_off(config))
-        updates: list[Any] = []
-        for section in sections:
-            if section.name in used:
-                *reports, fold, status = section.reports(config)
-                unfold = _unfold(model.section(section.name).open, opened, status)
-                reports += [{**fold, "visible": True, **unfold}, status]
-            else:
-                reports = ["", "", (), gr.update(visible=False), None]
-            updates += [*reports, gr.update(value="", visible=False)]
-            if section.off is not None:
-                updates.append(gr.update(visible=section.name in off))
-        return [
-            *updates,
-            gr.update(value="", visible=False),
-            gr.update(visible=len(used) > 1),
-            True,
-        ]
-
-    # Each change of structure (the page loaded, a module switched, an optional object
-    # turned on or off, an optional section added or removed, a choice from a list,
-    # revert, reset) shows the sections the config uses (their folds' lines with them)
-    # and the optional ones it leaves out, checks each again and clears its output and the
-    # whole config's: what was shown was about another config.
-    revision.change(
-        on_redraw,
-        inputs=[draft, unfolded],
-        outputs=[
-            *(
-                component
-                for section in sections
-                for component in (
-                    *section.checks,
-                    section.output,
-                    *([section.off] if section.off is not None else []),
-                )
-            ),
-            overview_output,
-            overview,
-            unfolded,
-        ],
-        show_progress="hidden",
-    )
 
     # What the tick last showed in this browser tab (the lock, the unsaved lines): sent
     # again only when it changed, since each update costs the browser a pass over the page.

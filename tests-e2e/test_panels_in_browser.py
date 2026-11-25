@@ -8,6 +8,7 @@ Opt-in, like the whole tier, and skipped without Playwright and its browser
     uv run pytest tests-e2e -rs
 """
 
+import importlib
 import json
 import os
 import re
@@ -66,16 +67,34 @@ class Installer:
         self.lib = lib
         self.gate = threading.Event()
         self.runs: list[list[str]] = []
+        # Where the install lands a package as a real one would (on `sys.path`): None, no
+        # package. A stand-in matplotlib there reproduces an extra pulling it in.
+        self.lands_in: Path | None = None
 
     def install(self, extras: list[str], on_output: Any = None) -> int:
         self.runs.append(list(extras))
         if on_output is not None:
             on_output("Resolved 3 packages")
+        if self.lands_in is not None:
+            _land_matplotlib(self.lands_in)
         if not self.gate.wait(timeout=20):
             return 1
         for kind in self.lib.installed:
             self.lib.installed[kind] = True
         return 0
+
+
+def _land_matplotlib(where: Path) -> None:
+    """A stand-in matplotlib, landed mid-install: its `get_backend` takes 3 s, as a real
+    one's does the first time it runs (it builds its font cache)."""
+    package = where / "matplotlib"
+    package.mkdir(parents=True, exist_ok=True)
+    (package / "__init__.py").write_text(
+        "import time\n"
+        "def get_backend():\n    time.sleep(3)\n    return 'agg'\n"
+        "def use(name):\n    pass\n"
+    )
+    importlib.invalidate_caches()
 
 
 class Served:
@@ -174,7 +193,7 @@ def test_switching_module_typing_and_picking_from_a_list_are_saved(
     voice_id.fill("v-42")
     voice_id.press("Tab")
     page.get_by_role("button", name="Save", exact=True).last.click()
-    page.get_by_text("Saved.").wait_for()
+    page.get_by_text("✅ Saved.", exact=True).wait_for()
 
     assert json.loads(folder.config_path.read_text()) == {
         "speech": {"module": {"type": "cloud-voice", "voice_id": "v-42"}}
@@ -276,7 +295,7 @@ def test_a_value_typed_is_unsaved_until_it_is_saved(
     page.get_by_text(re.compile(r"Unsaved changes\.$")).wait_for()
 
     page.get_by_role("button", name="Save", exact=True).last.click()
-    page.get_by_text("Saved.").wait_for()
+    page.get_by_text("✅ Saved.", exact=True).wait_for()
     unsaved.first.wait_for(state="hidden")
     assert unsaved.count() == 0
     assert json.loads(served.folder.config_path.read_text()) == {
@@ -432,7 +451,7 @@ def test_a_config_app_edits_a_file_and_saves_it(
     voice_id.fill("v-42")
     voice_id.press("Tab")
     page.get_by_role("button", name="Save", exact=True).last.click()
-    page.get_by_text("Saved.").wait_for()
+    page.get_by_text("✅ Saved.", exact=True).wait_for()
 
     # The library's own document, no key around it.
     assert json.loads(config_app.path.read_text()) == {
@@ -556,7 +575,6 @@ def test_a_fold_is_opened_and_its_line_follows_a_module_switch(
     page.get_by_text(
         "Backup voice — Cloud voice (hosted) · ❌ 1 problem in the config"
     ).wait_for()
-    page.get_by_text("2 sections need something: Speech, Backup voice.").wait_for()
 
 
 def test_an_optional_section_is_removed_and_added_back_with_its_settings(
@@ -583,39 +601,31 @@ def test_an_optional_section_is_removed_and_added_back_with_its_settings(
     sync_api.expect(_textbox(backup, "voice")).to_have_value("Zed")
     page.get_by_text("Backup voice — off").wait_for(state="hidden")
     page.get_by_role("button", name="Save", exact=True).last.click()
-    page.get_by_text("Saved.").wait_for()
+    page.get_by_text("✅ Saved.", exact=True).wait_for()
 
     assert json.loads(two_sections.folder.config_path.read_text())["backup"] == {
         "module": {"type": "local-voice", "voice": "Zed"}
     }
 
 
-def test_check_all_turns_a_fold_s_line_ready(
+def test_a_section_s_check_turns_its_fold_s_line_ready(
     two_sections: ServedTwo, browser: object
 ) -> None:
     page = _open_setup(two_sections, browser)
     page.get_by_text("Speech — Local voice · ❌ 1 required item missing").wait_for()
-    page.get_by_text("1 section needs something: Speech.").wait_for()
+    assert page.get_by_role("button", name="Check all").count() == 0  # the lines say it
 
-    # Prepared elsewhere (a terminal, another app): Check all sees it.
+    # Prepared elsewhere (a terminal, another app): the section's Check sees it.
     two_sections.speech.lexicon = True
     two_sections.speech.downloaded = {"Ada"}
-    # The whole config's actions, under the folds, just above Save.
-    check_all = page.get_by_role("button", name="Check all")
-    save = page.get_by_role("button", name="Save", exact=True).last
-    assert check_all.bounding_box()["y"] < save.bounding_box()["y"]  # type: ignore[index]
-    folds = page.locator(".app-setup-fold")
-    last_fold = folds.nth(folds.count() - 1).bounding_box()
-    assert last_fold["y"] < check_all.bounding_box()["y"]  # type: ignore[index]
-    check_all.click()
+    _fold(page, "Speech —").get_by_role("button", name="Check", exact=True).click()
 
     page.get_by_text("Speech — Local voice · ✅ Ready").wait_for()
-    page.get_by_text("✅ Ready to run", exact=True).wait_for()
     # A check never folds a section: it stays open, ready.
     sync_api.expect(_toggle(_fold(page, "Speech —"))).to_have_class(OPEN)
 
 
-def test_one_section_is_drawn_without_the_whole_config_s_actions(
+def test_one_section_is_drawn_with_its_two_titled_columns(
     served: Served, browser: object
 ) -> None:
     page = _open_setup(served, browser)
@@ -626,6 +636,44 @@ def test_one_section_is_drawn_without_the_whole_config_s_actions(
     _textbox(page, "speed").wait_for()
     page.get_by_role("heading", name="Settings").wait_for()
     page.get_by_role("heading", name="On this machine").wait_for()
-    # Its own Check, not the whole config's: they would repeat it.
     assert page.get_by_role("button", name="Check", exact=True).is_visible()
-    assert not page.get_by_role("button", name="Check all").is_visible()
+
+
+def test_an_install_bringing_matplotlib_is_followed_live_and_its_new_lines_shown(
+    served: Served, browser: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The library has no line but its extra until it is installed; the install lands a
+    # matplotlib, as the extra of a real library pulling torch and transformers did.
+    served.lib.installed["local-voice"] = False
+    landed = tmp_path / "site"
+    landed.mkdir()
+    monkeypatch.syspath_prepend(str(landed))
+    served.installer.lands_in = landed
+    try:
+        page = _open_setup(served, browser)
+        line = page.locator(ITEM, has_text="local-voice extra").last
+        line.get_by_text("Missing – required").wait_for()
+        assert page.locator(ITEM, has_text="Lexicon").count() == 0
+
+        line.get_by_role("button", name="Install").click()
+        # Followed live: the line says so, with uv's latest words.
+        line.get_by_text("Installing…").wait_for()
+        line.get_by_text("Resolved 3 packages").wait_for()
+
+        served.installer.gate.set()
+        # The section checked again once the install ended: its new lines, each with its
+        # action, and no event lost on the way (gradio's "Error").
+        lexicon = page.locator(ITEM, has_text="Lexicon").last
+        lexicon.get_by_text("Missing – required").wait_for()
+        assert lexicon.get_by_role("button", name="Prepare").is_enabled()
+        page.locator(ITEM, has_text="Voice Ada").last.get_by_role(
+            "button", name="Prepare"
+        ).wait_for()
+        page.locator(ITEM, has_text="local-voice extra").last.get_by_text(
+            "Ready"
+        ).wait_for()
+        assert page.get_by_text("Error", exact=True).count() == 0
+        # Never imported by the page's events: nothing waited on it.
+        assert "matplotlib" not in sys.modules
+    finally:
+        sys.modules.pop("matplotlib", None)

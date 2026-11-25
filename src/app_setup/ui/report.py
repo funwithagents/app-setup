@@ -8,14 +8,13 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from app_setup.app import Problem, SetupItem, summary_line
+from app_setup.app import Problem, SetupItem
 from app_setup.secrets import SecretVariable
 
 __all__ = [
     "HEADER",
     "Progress",
     "config_report",
-    "config_summary",
     "item_status",
     "secrets_report",
     "section_line",
@@ -57,11 +56,6 @@ def setup_summary(items: Sequence[SetupItem]) -> str:
     if deferred:
         return f"✅ **Ready to run** — {optional}"
     return "✅ **Ready**"
-
-
-# The whole config's line, over the folds: the model's words (`AppModel.summary`), so an
-# app without gradio says it alike.
-config_summary = summary_line
 
 
 def section_status(
@@ -163,7 +157,11 @@ def item_status(item: SetupItem, progress: Progress | None = None) -> tuple[str,
                 _join(message, f"({progress.elapsed_s:.0f} s)"),
             )
         if progress.ok:
-            return "✅ **Ready**", "Installed." if progress.install else "Prepared."
+            # An install changes what the section needs: it is checked again next, which
+            # loads the library just installed (slow the first time).
+            if progress.install:
+                return "✅ **Ready**", "Installed. Checking the section again…"
+            return "✅ **Ready**", "Prepared."
         return "❌ **Failed**", _join(progress.message, f"**{verb}** tries again.")
     if item.status == "ready":
         return "✅ **Ready**", item.detail

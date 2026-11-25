@@ -692,32 +692,3 @@ def test_an_optional_section_cannot_be_a_bare_app_s_whole_config(
 ) -> None:
     with pytest.raises(ValueError, match="cannot be optional"):
         App("talk", "talk-app", (Section("speech", lib, optional=True),), {}, bare=True)
-
-
-def test_the_summary_says_the_whole_config_in_the_table_s_words(
-    tmp_path: Path,
-) -> None:
-    speech, backup = SpeechLib(), SpeechLib()
-    model = _model(
-        tmp_path,
-        speech,
-        sections=(
-            Section("speech", speech, title="Voice"),
-            Section("backup", backup, title="Backup voice"),
-        ),
-    )
-    config = {**DEFAULTS, "backup": {"module": {"type": "cloud-voice"}}}
-
-    # A problem in one, a required item missing in the other (the lexicon).
-    assert model.summary(config) == "❌ 2 sections need something: Voice, Backup voice."
-    assert model.summary(config, ["speech"]) == "❌ 1 section needs something: Voice."
-
-    speech.lexicon = True
-    ready = {**DEFAULTS, "backup": DEFAULTS["speech"]}
-    backup.lexicon = True
-    assert model.summary(ready) == (
-        "✅ Ready to run — 2 optional items missing: the first start will get them, "
-        "slower"
-    )
-    speech.downloaded = backup.downloaded = {"Ada"}
-    assert model.summary(ready) == "✅ Ready to run"

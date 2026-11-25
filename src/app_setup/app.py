@@ -38,7 +38,6 @@ __all__ = [
     "Section",
     "SectionOpen",
     "SetupItem",
-    "summary_line",
 ]
 
 ContractSource = SetupContract | Callable[[], SetupContract]
@@ -231,25 +230,6 @@ def _extra_item(requirement: str) -> dict[str, Any]:
         "preparable": False,
         "required": True,
     }
-
-
-def _count(n: int, what: str) -> str:
-    return f"{n} {what}{'' if n == 1 else 's'}"
-
-
-def summary_line(needing: Sequence[str], deferred: int) -> str:
-    """The whole config's line, in the items table's words: the titles of the sections
-    that need something (a problem in the config, a required item missing), else ready,
-    with the optional items missing a first start would get itself."""
-    if needing:
-        verb = "needs" if len(needing) == 1 else "need"
-        return f"❌ {_count(len(needing), 'section')} {verb} something: {', '.join(needing)}."
-    if deferred:
-        return (
-            f"✅ Ready to run — {_count(deferred, 'optional item')} missing: the first "
-            "start will get them, slower"
-        )
-    return "✅ Ready to run"
 
 
 def _named(variables: Sequence[str], *texts: str) -> str | None:
@@ -635,23 +615,6 @@ class AppModel:
             if item.blocking
         ]
         return reasons
-
-    def summary(
-        self, config: Mapping[str, Any], sections: Iterable[str] | None = None
-    ) -> str:
-        """The whole config's line, in the table's words: ready to run (and how many
-        optional items a first start would get itself), or which sections need something
-        (a problem in the config, a required item missing). Only *sections*, when given."""
-        names = self.used(config, sections)
-        problems = {p.section for p in self.check_config(config, names)}
-        items = self.check_setup(config, names)
-        blocked = {item.section for item in items if item.blocking}
-        needing = [
-            self.section_title(name)
-            for name in names
-            if name in problems or name in blocked
-        ]
-        return summary_line(needing, sum(1 for item in items if item.deferred))
 
     def to_prepare(
         self, config: Mapping[str, Any], sections: Iterable[str] | None = None

@@ -107,11 +107,13 @@ def test_a_line_being_acted_on_shows_its_progress_then_how_it_ended() -> None:
         "✅ **Ready**",
         "Prepared.",
     )
+    # An install ended well: its section is checked again next (the library just
+    # installed loads then, slowly the first time), and the line says so before.
     assert item_status(
         EXTRA, Progress(False, None, "", 9.0, ok=True, install=True)
     ) == (
         "✅ **Ready**",
-        "Installed.",
+        "Installed. Checking the section again…",
     )
     assert item_status(VOICE, Progress(False, 0.2, "Unreachable.", 2.0, ok=False)) == (
         "❌ **Failed**",

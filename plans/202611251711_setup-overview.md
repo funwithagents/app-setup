@@ -6,9 +6,9 @@ Implements [specs/setup-overview.md](../specs/setup-overview.md) (still **Draft*
 
 ## Scope
 
-- `src/app_setup/app.py` — `Section(optional, default, open)`; a bare app's section cannot be optional; `AppModel.used` leaving an absent optional section out; `optional_off`, `add_section` (with the document removed earlier, else the default), `remove_section`, `summary`, `section_title`; `summary_line`, the whole config's wording (gradio-free, so the model says it too)
+- `src/app_setup/app.py` — `Section(optional, default, open)`; a bare app's section cannot be optional; `AppModel.used` leaving an absent optional section out; `optional_off`, `add_section` (with the document removed earlier, else the default), `remove_section`, `section_title`
 - `src/app_setup/form.py` — `selected_modules(schema, document)`
-- `src/app_setup/ui/report.py` — `section_line`, `section_status`, `config_summary`
+- `src/app_setup/ui/report.py` — `section_line`, `section_status`; an install's end says the section is checked again
 - `src/app_setup/ui/form.py` — `section_title` delegating to the model
 - `src/app_setup/ui/panels.py` — the overview (Check all, Install all, Prepare all, Test all, the summary line, an output box), one `gr.Accordion` per section with its form and checks in two columns, Remove and the "off" line with Add; the fold's label and the section's status in every check's outputs
 - `tests/test_app.py`, `tests/test_form.py`, `tests/ui/test_report.py`, `tests/ui/test_panels.py`, `tests-e2e/test_panels_in_browser.py` — the spec's Testing section
@@ -28,6 +28,11 @@ Implements [specs/setup-overview.md](../specs/setup-overview.md) (still **Draft*
 5. Tests, then the existing ones adapted to the checks' two new outputs.
 6. After trying it (a one-section app): the whole config's actions (and their output box) move to just above Save, shown only while the config uses two sections or more (visibility in `on_redraw`'s outputs); the line stays on top. A fold's two columns are titled: **Settings** (the form, then the config's problems) and **On this machine** (a `variant="panel"` column: the status line, the table, the section's own buttons small on one row, its output). The table's **Action** title is aligned over the rows' buttons (gradio pads an HTML block, a button not).
 7. Each section says how its fold starts: `Section(open="needs" | "always" | "folded")`, "needs" by default; no rule of the panel's own, a single section included.
+8. After trying it on a six-section app:
+   - the whole config's line and actions removed (the folds' lines say it); `AppModel.summary`, `summary_line` and `config_summary` with them (nothing else used them);
+   - a revision per section (a hidden `gr.Number`): a change of structure in a section (and Add, Remove) redraws and checks it alone; the panel's revision (load, Revert, Reset) every section; each section's redraw passes over the others' `when` only, hiding the folds no longer used and bumping the revision of a section newly used (a tab's layout kept in a state). Measured on six sections whose check takes 0.5 s: Add from 6.1 s to 1.4 s, Remove from 5.1 s to 1.1 s;
+   - an install never waited for by an event: a line's Install and a section's Install all return at once; the rows' timer follows it (the line, the section's output box), shows its end, then checks the section again at its next tick (the first import of the library just installed can hold the process for seconds);
+   - gradio's per-event matplotlib switch guarded (`_guard_matplotlib`): an extra bringing matplotlib in froze the server (its font cache built in gradio's event loop) and lost an event's outputs (an `AttributeError` on leaving), found driving a real install of wica-interaction's `vision` extra.
 
 ## Verification
 
