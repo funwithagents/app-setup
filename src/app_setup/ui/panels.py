@@ -9,7 +9,9 @@ session uses the saved config: the Setup panel says so, and says when the two di
 
 from __future__ import annotations
 
+import html
 import itertools
+import re
 import threading
 import time
 from collections.abc import Callable, Iterator, Sequence
@@ -210,6 +212,11 @@ class _Actions:
             run = self.runs.get((item.section, item.id))
             return run.progress() if run is not None else None
 
+    def any_running(self) -> bool:
+        """Whether a line of any section is being acted on: the rows' timer runs then."""
+        with self.lock:
+            return any(run.ok is None for run in self.runs.values())
+
     def running(self, section: str) -> bool:
         with self.lock:
             return any(
@@ -254,18 +261,36 @@ def _line(actions: _Actions, item: SetupItem) -> tuple[str, str, dict[str, Any]]
     )
 
 
-# The table's columns: Item, Status, Explanation, Action.
-_SCALES = (2, 2, 4, 2)
-
-
-def _columns() -> list[gr.Column]:
-    return [gr.Column(scale=scale, min_width=80) for scale in _SCALES]
-
+# The table's width shares: the three text cells (Item, Status, Explanation) of one HTML
+# block, then the action.
+_CELLS_SCALE, _ACTION_SCALE = 8, 2
+_CELLS_STYLE = (
+    "display:grid;grid-template-columns:2fr 2fr 4fr;gap:12px;align-items:center"
+)
 
 # The most lines a section's table shows: its rows are drawn once, shown or hidden, so no
 # listener is ever dropped while a browser may still call it. Items past it are listed
-# under the table, without their actions.
-_ROWS = 16
+# under the table, without their actions. Kept small, with few components per row: each
+# event the page receives costs the browser a pass over every component, hidden ones
+# included, and a page with a few sections of many rows could not keep up.
+_ROWS = 10
+
+
+def _inline(text: str) -> str:
+    """*text*, Markdown with only `**bold**` and `` `code` `` (the report's wording), as
+    HTML: escaped first, so a library's words never become markup."""
+    escaped = html.escape(text)
+    escaped = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
+    return re.sub(r"`(.+?)`", r"<code>\1</code>", escaped)
+
+
+def _cells(title: str, status: str, explanation: str) -> str:
+    """A line's three text cells, laid out as the header's: one HTML block, so a row
+    costs the page one component for its text, not three."""
+    return (
+        f'<div style="{_CELLS_STYLE}"><div><strong>{html.escape(title)}</strong></div>'
+        f"<div>{_inline(status)}</div><div>{_inline(explanation)}</div></div>"
+    )
 
 
 @dataclass(frozen=True)
@@ -274,16 +299,10 @@ class _Row:
     its place in the section's last check."""
 
     row: gr.Row
-    title: gr.Markdown
-    status: gr.Markdown
-    explanation: gr.Markdown
+    cells: gr.HTML  # the item, its status, its explanation
     button: gr.Button  # Install or Prepare
     key: gr.Textbox  # a missing key's value
     save: gr.Button  # saves the key
-
-    @property
-    def texts(self) -> tuple[gr.Markdown, gr.Markdown, gr.Markdown]:
-        return self.title, self.status, self.explanation
 
 
 @dataclass(frozen=True)
@@ -296,30 +315,29 @@ class _Table:
 
     @property
     def components(self) -> list[Any]:
-        """What `table_lines` updates, in its order."""
+        """What `_table_lines` updates, in its order."""
         out: list[Any] = [self.header]
         for row in self.rows:
-            out += [row.row, *row.texts, row.button, row.key, row.save]
+            out += [row.row, row.cells, row.button, row.key, row.save]
         return [*out, self.overflow]
 
 
 def _draw_rows() -> _Table:
     """The table's components, all hidden until a check fills them."""
+    item, status, explanation, action = (h.strip("*") for h in HEADER)
     with gr.Row(equal_height=True, visible=False) as header:
-        for column, text in zip(_columns(), HEADER, strict=True):
-            with column:
-                gr.Markdown(text)
+        gr.HTML(
+            f'<div style="{_CELLS_STYLE}"><strong>{item}</strong>'
+            f"<strong>{status}</strong><strong>{explanation}</strong></div>",
+            scale=_CELLS_SCALE,
+            padding=False,
+        )
+        gr.Markdown(f"**{action}**", scale=_ACTION_SCALE)
     rows = []
     for _ in range(_ROWS):
         with gr.Row(equal_height=True, visible=False) as row:
-            title_col, status_col, explanation_col, action_col = _columns()
-            with title_col:
-                title = gr.Markdown()
-            with status_col:
-                status = gr.Markdown()
-            with explanation_col:
-                explanation = gr.Markdown()
-            with action_col:
+            cells = gr.HTML(scale=_CELLS_SCALE, padding=False)
+            with gr.Column(scale=_ACTION_SCALE, min_width=80):
                 button = gr.Button("Prepare", size="sm", visible=False)
                 key = gr.Textbox(
                     type="password",
@@ -328,7 +346,7 @@ def _draw_rows() -> _Table:
                     visible=False,
                 )
                 save = gr.Button("Save", size="sm", visible=False)
-        rows.append(_Row(row, title, status, explanation, button, key, save))
+        rows.append(_Row(row, cells, button, key, save))
     return _Table(header, tuple(rows), gr.Markdown(visible=False))
 
 
@@ -338,16 +356,14 @@ def _row_updates(
     """One row's updates for *item* (None: the row hidden). *same_item*: the row showed
     this item already, so a key being typed on it is kept."""
     if item is None:
-        return [gr.update(visible=False), *([gr.skip()] * 6)]
+        return [gr.update(visible=False), *([gr.skip()] * 4)]
     status, explanation, button_state = _line(actions, item)
     action = _action(item)
     key = action == "key"
     variable = item.variable or ""
     return [
         gr.update(visible=True),
-        f"**{item.title}**",
-        status,
-        explanation,
+        _cells(item.title, status, explanation),
         gr.update(
             value="Install" if action == "install" else "Prepare", **button_state
         ),
@@ -396,9 +412,9 @@ def _wire_table(
     timer: gr.Timer,
 ) -> None:
     """A section's table, wired once: filled from each check, each row's Install or
-    Prepare and key field acting on the item at its place, and the rows' *timer*
-    following each line's action. *checks*, filled by *reports*, are what a successful
-    install or a key saved updates."""
+    Prepare and key field acting on the item at its place; an action started turns the
+    rows' *timer* on (`_follow_rows`). *checks*, filled by *reports*, are what a
+    successful install or a key saved updates."""
     # The items the rows show, in this browser tab: a row keeping its item keeps a key
     # being typed on it.
     shown = gr.State(())
@@ -430,21 +446,29 @@ def _wire_table(
             if action == "prepare":
                 actions.start(config, item)
                 status, explanation, state = _line(actions, item)
-                return status, explanation, gr.update(**state), *((gr.skip(),) * 3)
+                return (
+                    _cells(item.title, status, explanation),
+                    gr.update(**state),
+                    *((gr.skip(),) * 3),
+                    gr.Timer(active=True),
+                )
             run = actions.install([item], item.host_extras[:1])
             if run is None:
                 return (gr.skip(),) * 6
             run.done.wait()
             # Installed: the section checked again. Failed: the line keeps its error.
             return (
-                *((gr.skip(),) * 3),
+                *((gr.skip(),) * 2),
                 *(reports(config) if run.ok else (gr.skip(),) * 3),
+                gr.skip(),
             )
 
+        # Install waits for its run: the rows' timer is turned on by the panel's own
+        # one-second tick, which sees an action running.
         row.button.click(
             on_button,
             inputs=[checked, draft],
-            outputs=[row.status, row.explanation, row.button, *checks],
+            outputs=[row.cells, row.button, *checks, timer],
             show_progress="hidden",
         )
 
@@ -472,26 +496,38 @@ def _wire_table(
                 show_progress="hidden",
             )
 
-    def on_rows_tick(items: tuple[SetupItem, ...]) -> list[Any]:
-        """Every half second: each line's status, explanation and button (a preparation's
-        progress, an install's latest words, how it ended)."""
+
+def _follow_rows(
+    actions: _Actions, sections: Sequence[_Section], timer: gr.Timer
+) -> None:
+    """The rows' *timer*, one for the whole panel, on only while a line is being acted on:
+    each tick sends the lines with an action (a preparation's progress, an install's latest
+    words, how it ended) and nothing else, then turns itself off once none runs. An idle
+    panel sends no event for its rows: each event costs the browser a pass over the page."""
+
+    def on_rows_tick(*checked: tuple[SetupItem, ...]) -> list[Any]:
         updates: list[Any] = []
-        for index in range(_ROWS):
-            item = item_at(items, index)
-            if item is None:
-                updates += [gr.skip()] * 3
-                continue
-            status, explanation, state = _line(actions, item)
-            updates += [status, explanation, gr.update(**state)]
-        return updates
+        for items in checked:
+            for index in range(_ROWS):
+                item = items[index] if index < len(items) else None
+                if item is None or actions.progress(item) is None:
+                    updates += [gr.skip()] * 2
+                    continue
+                status, explanation, state = _line(actions, item)
+                updates += [_cells(item.title, status, explanation), gr.update(**state)]
+        return [*updates, gr.Timer(active=actions.any_running())]
 
     timer.tick(
         on_rows_tick,
-        inputs=[checked],
+        inputs=[section.checked for section in sections],
         outputs=[
-            component
-            for row in table.rows
-            for component in (row.status, row.explanation, row.button)
+            *(
+                component
+                for section in sections
+                for row in section.table.rows
+                for component in (row.cells, row.button)
+            ),
+            timer,
         ],
         show_progress="hidden",
     )
@@ -509,6 +545,7 @@ class _Section:
     checked: gr.State
     output: gr.Textbox
     buttons: tuple[gr.Button, ...]
+    table: _Table
     # The section's problems, its summary and its items, for a config.
     reports: Callable[[Config], tuple[Any, ...]]
 
@@ -522,7 +559,7 @@ def _section_block(
     model: AppModel,
     name: str,
     draft: gr.State,
-    revision: gr.State,
+    revision: gr.Number,
     actions: _Actions,
     timer: gr.Timer,
 ) -> _Section:
@@ -633,11 +670,14 @@ def _section_block(
         outputs=[output, config_md, summary_md, checked],
     ).then(on_free, outputs=list(buttons))
 
-    def on_prepare_all(config: Config) -> None:
+    def on_prepare_all(config: Config) -> Any:
         for item in model.to_prepare(config, [name]):
             actions.start(config, item)
+        return gr.Timer(active=True)
 
-    prepare_all.click(on_prepare_all, inputs=[draft], show_progress="hidden")
+    prepare_all.click(
+        on_prepare_all, inputs=[draft], outputs=[timer], show_progress="hidden"
+    )
 
     def on_edited(config: Config) -> tuple[Any, ...]:
         return reports(config)
@@ -663,7 +703,7 @@ def _section_block(
     ).then(on_free, outputs=list(buttons))
 
     return _Section(
-        name, block, config_md, summary_md, checked, output, buttons, reports
+        name, block, config_md, summary_md, checked, output, buttons, table, reports
     )
 
 
@@ -674,7 +714,11 @@ def setup_panel(model: AppModel) -> SetupPanel:
     table of what it needs, a line per item with its own action), and at the bottom Save, Revert and Reset for the whole config, a line
     saying when the draft differs from the saved config at the top and next to Save."""
     draft = gr.State({})
-    revision = gr.State(0)
+    # Bumped on each change of the form's structure: the forms are drawn again then. A hidden
+    # number, not a `gr.State`: in a tab other than the first, gradio fires a State's change
+    # twice as the page loads (once more as the tab mounts), so the form was drawn twice
+    # and a click on the first drawing reached listeners the second had dropped.
+    revision = gr.Number(0, precision=0, visible=False)
     saved = gr.State(0)
     # The last `SecretStore.revision` this tab saw: when it changes (a key saved or
     # removed, from any tab), the sections are checked again.
@@ -698,14 +742,15 @@ def setup_panel(model: AppModel) -> SetupPanel:
     gr.Markdown(REQUIRED)
     unsaved_top = gr.Markdown()
 
-    # The item rows' progress, on a timer of their own: sharing the lock line's timer
-    # stopped the lock line updating in the browser.
-    rows_timer = gr.Timer(0.5)
+    # The item rows' progress, on a timer of their own (sharing the lock line's stopped the
+    # lock line updating in the browser), off until a line is acted on (`_follow_rows`).
+    rows_timer = gr.Timer(0.5, active=False)
     actions = _Actions(model)
     sections = [
         _section_block(model, section.name, draft, revision, actions, rows_timer)
         for section in model.app.sections
     ]
+    _follow_rows(actions, sections, rows_timer)
 
     # The config is kept last, after the sections it is tried in.
     unsaved_bottom = gr.Markdown()
@@ -839,17 +884,29 @@ def setup_panel(model: AppModel) -> SetupPanel:
         outputs=[draft, revision, saved, notice, unsaved_top, unsaved_bottom],
     )
 
-    def on_tick(config: Config, rev: int, seen: int | None) -> list[Any]:
+    # What the tick last showed in this browser tab (the lock, the unsaved lines): sent
+    # again only when it changed, since each update costs the browser a pass over the page.
+    ticked = gr.State(None)
+
+    def on_tick(
+        config: Config, rev: int, seen: int | None, last: tuple[Any, ...] | None
+    ) -> list[Any]:
         """Every second: the lock (Save and Reset with it), the unsaved lines (another tab
-        may have saved), and, when a key was saved or removed since this tab last looked,
-        the checks of the sections the config uses."""
+        may have saved), each sent only when it changed; the rows' timer turned on when a
+        line is being acted on (from another tab, or an install); and, when a key was saved
+        or removed since this tab last looked, the checks of the sections the config
+        uses."""
         locked = model.locked()
-        updates: list[Any] = [
-            LOCKED if locked else "",
-            gr.update(interactive=not locked),
-            gr.update(interactive=not locked),
-            *unsaved_lines(config, rev),
-        ]
+        now = (locked, *unsaved_lines(config, rev))
+        if now == last:
+            updates: list[Any] = [gr.skip()] * 5
+        else:
+            updates = [
+                LOCKED if locked else "",
+                gr.update(interactive=not locked),
+                gr.update(interactive=not locked),
+                *now[1:],
+            ]
         current = model.secrets.revision
         changed = rev and seen is not None and seen != current
         used = set(model.used(config)) if changed else set()
@@ -859,11 +916,12 @@ def setup_panel(model: AppModel) -> SetupPanel:
                 updates += section.reports(config)
             else:
                 updates += [gr.skip()] * len(section.checks)
-        return updates
+        rows = gr.Timer(active=True) if actions.any_running() else gr.skip()
+        return [*updates, rows, now if now != last else gr.skip()]
 
     timer.tick(
         on_tick,
-        inputs=[draft, revision, secrets_seen],
+        inputs=[draft, revision, secrets_seen, ticked],
         outputs=[
             lock,
             save,
@@ -872,6 +930,8 @@ def setup_panel(model: AppModel) -> SetupPanel:
             unsaved_bottom,
             secrets_seen,
             *(component for section in sections for component in section.checks),
+            rows_timer,
+            ticked,
         ],
         show_progress="hidden",
     )
@@ -902,7 +962,8 @@ def secrets_panel(model: AppModel, config: gr.State | None = None) -> None:
 
     gr.Markdown(f"### In the folder's .env\n\n`{model.folder.env_path}`")
     # Changes each time the file may have changed: the list below is drawn again.
-    env_revision = gr.State(0)
+    # A hidden number, not a `gr.State`, for the reason the Setup panel's `revision` is.
+    env_revision = gr.Number(0, precision=0, visible=False)
     refresh = gr.Button("Refresh", scale=0)
 
     inputs = [config] if config is not None else []

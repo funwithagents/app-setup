@@ -189,7 +189,7 @@ def _options_picker(
     list_name: str,
     path: Path,
     draft: gr.State,
-    revision: gr.State,
+    revision: gr.Number,
 ) -> None:
     """A button that loads a named list (`options`), and a dropdown whose choice merges its
     fields into the object at *path*."""
@@ -238,7 +238,7 @@ def _item(
     section: str,
     item: FormItem,
     draft: gr.State,
-    revision: gr.State,
+    revision: gr.Number,
     edited: gr.State | None,
 ) -> None:
     if isinstance(item, FormField):
@@ -252,7 +252,11 @@ def _item(
 
 
 def _choice(
-    model: AppModel, section: str, item: FormChoice, draft: gr.State, revision: gr.State
+    model: AppModel,
+    section: str,
+    item: FormChoice,
+    draft: gr.State,
+    revision: gr.Number,
 ) -> None:
     keys = {json.dumps(value): value for _, value in item.options}
     selected = json.dumps(item.selected) if item.selected is not None else None
@@ -290,7 +294,7 @@ def _group(
     section: str,
     group: FormGroup,
     draft: gr.State,
-    revision: gr.State,
+    revision: gr.Number,
     edited: gr.State | None,
 ) -> None:
     full = (section, *group.path)
@@ -360,7 +364,7 @@ def render_section(
     name: str,
     config: Config,
     draft: gr.State,
-    revision: gr.State,
+    revision: gr.Number,
     edited: gr.State | None = None,
 ) -> None:
     """Draw the form of section *name* of *config*: its fields, from its library's

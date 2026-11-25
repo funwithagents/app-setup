@@ -54,7 +54,8 @@ def _model(
 def _drawn(model: AppModel, config: dict[str, Any]) -> list[Any]:
     """The components the form draws for *config*."""
     with gr.Blocks() as page:
-        draft, revision = gr.State(config), gr.State(0)
+        draft = gr.State(config)
+        revision = gr.Number(0, precision=0, visible=False)
         for name in model.used(config):
             render_section(model, name, config, draft, revision)
     return [block for block in page.blocks.values() if isinstance(block, Component)]
@@ -160,11 +161,15 @@ def test_the_setup_panel_greys_save_and_reset_while_the_app_locks_the_config(
         setup_panel(_model(tmp_path, locked=lambda: running[0]))
     tick = _handler(page, "on_tick")
 
-    assert tick(DEFAULTS, 1, 0)[0] == ""
+    first = tick(DEFAULTS, 1, 0, None)
+    assert first[0] == ""
     running[0] = True
-    note, save, reset = tick(DEFAULTS, 1, 0)[:3]
+    note, save, reset = tick(DEFAULTS, 1, 0, first[-1])[:3]
     assert note == LOCKED
     assert save["interactive"] is False and reset["interactive"] is False
+    # Unchanged since the last tick: nothing sent, the browser left alone.
+    again = tick(DEFAULTS, 1, 0, tick(DEFAULTS, 1, 0, first[-1])[-1])
+    assert again[:5] == [gr.skip()] * 5
 
 
 def test_the_secrets_panel_reads_the_config_it_follows_else_the_saved_one(
@@ -361,7 +366,10 @@ def test_the_unsaved_lines_say_when_the_draft_differs_from_the_saved_config(
     model.save(cloud)
     # Another tab saved: this tab's timer sees its draft differ now.
     model.save(DEFAULTS)
-    assert _handler(page, "on_tick")(cloud, 1, 0)[3:5] == [UNSAVED_TOP, UNSAVED_BOTTOM]
+    assert _handler(page, "on_tick")(cloud, 1, 0, None)[3:5] == [
+        UNSAVED_TOP,
+        UNSAVED_BOTTOM,
+    ]
 
 
 def _listeners(page: gr.Blocks, component: Any) -> dict[str, Any]:
@@ -391,7 +399,8 @@ def test_a_field_left_checks_its_section_again(
 
     # The form as the panel draws it, with the section's `edited` counter.
     with gr.Blocks() as form:
-        draft, revision, edited = gr.State(cloud), gr.State(0), gr.State(0)
+        draft, edited = gr.State(cloud), gr.State(0)
+        revision = gr.Number(0, precision=0, visible=False)
         render_section(model, "speech", cloud, draft, revision, edited)
     key_env = next(
         b for b in form.blocks.values() if getattr(b, "label", None) == "api_key_env"
@@ -426,17 +435,19 @@ def test_the_timer_checks_again_after_a_key_was_saved_and_only_then(
     seen = model.secrets.revision
 
     # Nothing written since the tab looked: no check, its seen revision kept.
-    quiet = tick(cloud, 1, seen)
-    assert all(isinstance(u, dict) and u.get("__type__") == "update" for u in quiet[5:])
+    quiet = tick(cloud, 1, seen, None)
+    assert all(
+        isinstance(u, dict) and u.get("__type__") == "update" for u in quiet[5:-1]
+    )
 
     model.secrets.set("CLOUD_VOICE_KEY", "s3cret")  # from the Secrets panel, say
-    seen_now, problems, summary, items = tick(cloud, 1, seen)[5:]
+    seen_now, problems, summary, items = tick(cloud, 1, seen, None)[5:-2]
 
     assert seen_now == model.secrets.revision != seen
     assert "valid" in problems and summary == "✅ **Ready**"
     assert all(i.status == "ready" for i in items)
     # Seen: the next tick checks nothing again.
-    assert tick(cloud, 1, seen_now)[6:] == quiet[6:]
+    assert tick(cloud, 1, seen_now, None)[6:-1] == quiet[6:-1]
 
 
 def test_a_field_not_set_shows_its_default_greyed_and_a_set_one_its_value(
@@ -465,6 +476,35 @@ def test_a_field_not_set_shows_its_default_greyed_and_a_set_one_its_value(
     # A checkbox shows one state: unset, its hint says the default applies.
     assert "Not set: the default (off) applies." in empty["loud"].info
     assert "Not set" not in filled["loud"].info
+
+
+def test_the_rows_timer_runs_only_while_a_line_is_acted_on(tmp_path: Path) -> None:
+    lib = SpeechLib()
+    lib.gate = threading.Event()
+    model = _model(tmp_path, sections=(Section("speech", lib),))
+    with gr.Blocks() as page:
+        setup_panel(model)
+    tick = _handler(page, "on_rows_tick")  # one for the whole panel
+    on_button = _handlers(page, "on_button")[0]  # one per row; the row given below
+    items = tuple(model.check_setup(DEFAULTS))
+    weights = next(i for i, item in enumerate(items) if item.id == "weights:Ada")
+
+    # At rest: nothing sent, and the timer turns itself off.
+    *rows, timer = tick(items)
+    assert rows == [gr.skip()] * len(rows) and timer.active is False
+
+    # A line's Prepare turns the timer on; each tick sends that line only.
+    assert on_button(items, DEFAULTS, index=weights)[-1].active is True
+    *rows, timer = tick(items)
+    sent = [i for i, update in enumerate(rows) if update != gr.skip()]
+    assert sent == [2 * weights, 2 * weights + 1]
+    assert "⏳ <strong>Preparing" in rows[2 * weights] and timer.active is True
+
+    # Done: the last tick shows how it ended, and turns the timer off.
+    lib.gate.set()
+    _wait(lambda: lib.downloaded == {"Ada"})
+    _wait(lambda: tick(items)[-1].active is False)
+    assert "✅ <strong>Ready</strong>" in tick(items)[2 * weights]
 
 
 def test_prepare_all_runs_the_lines_side_by_side_each_ending_on_its_own(
@@ -595,10 +635,10 @@ def _table(model: AppModel, actions: _Actions) -> gr.Blocks:
 
 
 def _row(updates: list[Any], index: int) -> list[Any]:
-    """Row *index*'s updates in `_table_lines`: shown, title, status, explanation, its
-    button, its key field, its key's Save."""
-    start = 1 + 7 * index
-    return updates[start : start + 7]
+    """Row *index*'s updates in `_table_lines`: shown, its cells (the item, its status,
+    its explanation), its button, its key field, its key's Save."""
+    start = 1 + 5 * index
+    return updates[start : start + 5]
 
 
 def test_the_table_has_a_line_per_item_with_its_action(
@@ -616,27 +656,25 @@ def test_the_table_has_a_line_per_item_with_its_action(
     keyed = _table_lines(actions, keyed_items)
 
     assert local[0]["visible"] is True  # the header
-    shown, title, status, explanation, button, key, save = _row(local, 0)
-    assert shown["visible"] and title == "**local-voice extra**"
-    assert (status, explanation) == (
-        "❌ **Missing – required**",
-        (
-            "pip install 'speech-lib[local-voice]' **Install** adds it (the "
-            "`speech-local` extra)."
-        ),
-    )
+    shown, cells, button, key, save = _row(local, 0)
+    assert shown["visible"] and "<strong>local-voice extra</strong>" in cells
+    assert "❌ <strong>Missing – required</strong>" in cells
+    assert (
+        "pip install &#x27;speech-lib[local-voice]&#x27; <strong>Install</strong> adds "
+        "it (the <code>speech-local</code> extra)."
+    ) in cells
     assert (button["value"], button["visible"]) == ("Install", True)
     assert (key["visible"], save["visible"]) == (False, False)
     assert _row(local, 1)[0]["visible"] is False  # one item: the other rows hidden
     # The cloud voice's extra is there; its key is missing: a field and Save, no button.
     index = next(i for i, item in enumerate(keyed_items) if item.variable)
-    _, title, _, _, button, key, save = _row(keyed, index)
-    assert title == "**CLOUD_VOICE_KEY**"
+    _, cells, button, key, save = _row(keyed, index)
+    assert "<strong>CLOUD_VOICE_KEY</strong>" in cells
     assert key["visible"] and key["placeholder"] == "CLOUD_VOICE_KEY"
     assert key["value"] == "" and save["visible"] and not button["visible"]
     # Checked again with the same items: a key being typed on its line is kept.
     again = _row(_table_lines(actions, keyed_items, keyed_items), index)
-    assert "value" not in again[5]
+    assert "value" not in again[3]
 
 
 def test_the_rows_are_drawn_once_so_no_listener_is_ever_dropped(
@@ -736,7 +774,10 @@ def test_an_extra_installed_from_its_line_checks_the_section_again(
         installer.gates[0].set()
 
     threading.Thread(target=release).start()
-    *_, items = on_button(items, DEFAULTS, index=0)
+    updates = on_button(items, DEFAULTS, index=0)
+    # One value per output: the line's cells and button, the section's checks, the timer.
+    assert len(updates) == 6
+    *_, items, _ = updates
 
     assert installer.runs == [["speech-local"]]
     assert items[0].status == "ready"
