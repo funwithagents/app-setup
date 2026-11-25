@@ -217,6 +217,19 @@ def test_an_optional_object_is_switched_on_empty_and_off_removed() -> None:
     assert "gate" not in off["tts"]
 
 
+def test_an_optional_object_with_a_module_choice_starts_on_its_first_module() -> None:
+    choice = _items(_items(layout(SCHEMA, {"module": {}}))["module"])["<choice>"].choice
+
+    on = toggle_group({"tts": {}}, ("tts", "module"), True, choice)
+    kept = toggle_group(
+        {"tts": {"module": {"type": "cloud-voice"}}}, ("tts", "module"), True, choice
+    )
+
+    # Its dropdown shows a module, and that module's fields are drawn, rather than nothing.
+    assert on["tts"]["module"] == {"type": "local-voice"}
+    assert kept["tts"]["module"] == {"type": "cloud-voice"}
+
+
 def test_the_secret_variables_are_the_named_ones_or_the_default() -> None:
     named = {"module": {"type": "cloud-voice", "api_key_env": "MY_KEY"}}
     default = {"module": {"type": "cloud-voice"}}

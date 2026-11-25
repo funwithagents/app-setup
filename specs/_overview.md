@@ -38,9 +38,11 @@ For the config being edited, in this order, each step gating the next:
 
 1. `check_config` — the config itself is right. Works with nothing installed.
 2. `check_setup` — what this machine is missing for it: extras, keys, files.
-3. The user fixes what only they can: one click installs the missing extras, the Secrets tab sets the missing keys.
+3. The user fixes what only they can, each on the item's own line: **Install** adds a missing extra (**Install all** adds every one in one run), a key is typed on its line (or in the Secrets tab).
 4. `prepare` — on click, the library prepares the missing items (downloads them, builds a cache), all or one at a time.
 5. `check_setup` again; the app's Start runs when nothing is missing (`AppModel.blockers`).
+
+Steps 1 to 4 act on the **draft**, the config as it is in the form, one per browser tab, saved or not; the app's Start runs the **saved** config only. The panel says when the two differ (`AppModel.unsaved`), and the checks run again by themselves once a field is finished or a key saved. Keys and the launch choice are saved at once.
 
 Outside the sequence, `probe` runs one section for real on request (a Test button): it tells which section of an app is broken without starting the others.
 

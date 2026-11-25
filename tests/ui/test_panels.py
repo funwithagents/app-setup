@@ -1,3 +1,4 @@
+import os
 import threading
 import time
 from collections.abc import Callable
@@ -5,21 +6,38 @@ from pathlib import Path
 from typing import Any
 
 import gradio as gr
+import pytest
 from fakes import SpeechLib
 from gradio.components import Component
 
+from app_setup import app as app_module
 from app_setup.app import App, AppModel, Section
+from app_setup.extras import RequirementStatus
 from app_setup.folder import ConfigFolder
 from app_setup.secrets import SecretStore
-from app_setup.ui import secrets_panel, setup_panel
+from app_setup.ui import secrets_panel, setup_panel, unsaved_notice
 from app_setup.ui.form import render_section, section_title
-from app_setup.ui.panels import LOCKED, _Preparations, _row
+from app_setup.ui.panels import (
+    DRAFT,
+    LOCKED,
+    UNSAVED_BOTTOM,
+    UNSAVED_SESSION,
+    UNSAVED_TOP,
+    _Actions,
+    _draw_rows,
+    _line,
+    _table_lines,
+    _wire_table,
+)
 
 DEFAULTS = {"speech": {"module": {"type": "local-voice"}}}
 
 
 def _model(
-    tmp_path: Path, locked: Callable[[], bool] | None = None, **app: Any
+    tmp_path: Path,
+    locked: Callable[[], bool] | None = None,
+    environ: dict[str, str] | None = None,
+    **app: Any,
 ) -> AppModel:
     application = App(
         name="talk",
@@ -29,13 +47,15 @@ def _model(
         **app,
     )
     folder = ConfigFolder(tmp_path, DEFAULTS)
-    return AppModel(application, folder, SecretStore(folder.env_path, {}), locked)
+    store = SecretStore(folder.env_path, {} if environ is None else environ)
+    return AppModel(application, folder, store, locked)
 
 
 def _drawn(model: AppModel, config: dict[str, Any]) -> list[Any]:
     """The components the form draws for *config*."""
     with gr.Blocks() as page:
-        draft, revision = gr.State(config), gr.State(0)
+        draft = gr.State(config)
+        revision = gr.Number(0, precision=0, visible=False)
         for name in model.used(config):
             render_section(model, name, config, draft, revision)
     return [block for block in page.blocks.values() if isinstance(block, Component)]
@@ -141,11 +161,15 @@ def test_the_setup_panel_greys_save_and_reset_while_the_app_locks_the_config(
         setup_panel(_model(tmp_path, locked=lambda: running[0]))
     tick = _handler(page, "on_tick")
 
-    assert tick()[0] == ""
+    first = tick(DEFAULTS, 1, 0, None)
+    assert first[0] == ""
     running[0] = True
-    note, save, reset = tick()
+    note, save, reset = tick(DEFAULTS, 1, 0, first[-1])[:3]
     assert note == LOCKED
     assert save["interactive"] is False and reset["interactive"] is False
+    # Unchanged since the last tick: nothing sent, the browser left alone.
+    again = tick(DEFAULTS, 1, 0, tick(DEFAULTS, 1, 0, first[-1])[-1])
+    assert again[:5] == [gr.skip()] * 5
 
 
 def test_the_secrets_panel_reads_the_config_it_follows_else_the_saved_one(
@@ -163,6 +187,30 @@ def test_the_secrets_panel_reads_the_config_it_follows_else_the_saved_one(
     assert "names no environment variable" in _handler(alone, "on_load")()[0]
     model.save(cloud)
     assert "`CLOUD_VOICE_KEY`" in _handler(alone, "on_load")()[0]
+
+
+def test_the_secrets_panel_follows_a_key_saved_elsewhere_without_a_reload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model = _model(tmp_path, environ=_environ(monkeypatch))
+    cloud = {"speech": {"module": {"type": "cloud-voice", "voice_id": "v"}}}
+    with gr.Blocks() as page:
+        secrets_panel(model, gr.State(cloud))
+    tick = _handler(page, "on_secrets_tick")
+
+    # The page loads: its table, and the store's revision that table shows.
+    shown, _, seen = _handler(page, "on_load")(cloud)
+    assert "❌ not set" in shown
+    assert tick(seen, 1, cloud) == (gr.skip(), gr.skip(), gr.skip())  # nothing new
+
+    # A key saved on a line of the Setup panel, or in another tab: the same store. Even
+    # when the timer's first tick comes after it (a tab not opened yet), it is seen.
+    model.secrets.set("CLOUD_VOICE_KEY", "s3cret")
+    report, revision, now = tick(seen, 1, cloud)
+
+    assert "`CLOUD_VOICE_KEY`" in report and "the folder's .env" in report
+    assert "not set" not in report
+    assert revision == 2 and now == model.secrets.revision  # the .env list drawn again
 
 
 def test_the_secrets_panel_keeps_the_env_file_s_variables_out_of_the_config_s_table(
@@ -206,7 +254,9 @@ def test_each_section_has_its_own_checks_acting_on_it_alone(tmp_path: Path) -> N
 
     buttons = [b.value for b in page.blocks.values() if isinstance(b, gr.Button)]
     speech_check, backup_check = _handlers(page, "on_check")
-    speech_problems, _, (_, speech_items) = speech_check(config)
+    speech_problems, _, speech_items = speech_check(config)
+    # A check finding what the last one found leaves the table as it is (not redrawn).
+    assert speech_check(config)[2] == speech_items
     backup_problems, _, _ = backup_check(config)
 
     assert buttons.count("Test") == 2 and buttons.count("Prepare all") == 2
@@ -227,7 +277,7 @@ def test_each_section_has_its_own_checks_acting_on_it_alone(tmp_path: Path) -> N
     assert (shown[0]["visible"], shown[5]["visible"]) == (True, True)
     assert (hidden[0]["visible"], hidden[5]["visible"]) == (True, False)
     assert "/backup/module/voice_id" in shown[6]
-    assert hidden[6] == "" and hidden[8] == (0, [])
+    assert hidden[6] == "" and hidden[8] == ()
 
 
 def test_an_app_with_autostart_gets_its_checkbox_saved_at_once(tmp_path: Path) -> None:
@@ -247,21 +297,157 @@ def test_an_app_with_autostart_gets_its_checkbox_saved_at_once(tmp_path: Path) -
     assert model.autostart() is False
     assert not [b for b in without.blocks.values() if isinstance(b, gr.Checkbox)]
 
-    # The launch choice comes first, then a "Configuration" title over the buttons that
-    # act on the config only; an app without autostart has neither.
+    # The launch choice comes first, then the "Configuration" title over the config.
     drawn = list(page.blocks.values())
-    save = next(b for b in drawn if isinstance(b, gr.Button) and b.value == "Save")
-    title = next(
-        b
-        for b in drawn
-        if isinstance(b, gr.Markdown) and b.value == "### Configuration"
-    )
-    assert drawn.index(checkbox) < drawn.index(title) < drawn.index(save)
-    assert not [
-        b
-        for b in without.blocks.values()
-        if isinstance(b, gr.Markdown) and b.value == "### Configuration"
+    assert drawn.index(checkbox) < drawn.index(_markdown(drawn, "### Configuration"))
+
+
+def _markdown(drawn: list[Any], text: str) -> Any:
+    return next(b for b in drawn if isinstance(b, gr.Markdown) and b.value == text)
+
+
+def test_the_config_is_tried_in_the_sections_and_saved_at_the_bottom(
+    tmp_path: Path,
+) -> None:
+    for autostart in (True, None):
+        with gr.Blocks() as page:
+            setup_panel(
+                _model(
+                    tmp_path / str(autostart),
+                    autostart=autostart,
+                    sections=(
+                        Section("speech", SpeechLib()),
+                        Section("backup", SpeechLib()),
+                    ),
+                )
+            )
+        drawn = list(page.blocks.values())
+        buttons = [b for b in drawn if isinstance(b, gr.Button)]
+        # The config's Save, the last one: each row's key has its own above.
+        save = [b for b in buttons if b.value == "Save"][-1]
+        tests = [drawn.index(b) for b in buttons if b.value == "Test"]
+
+        # The title and the line saying which config the buttons try, then both
+        # sections' blocks, then Save, Revert and Reset.
+        title = drawn.index(_markdown(drawn, "### Configuration"))
+        line = drawn.index(_markdown(drawn, DRAFT))
+        assert len(tests) == 2
+        assert title < line < min(tests) and max(tests) < drawn.index(save)
+        revert = next(b for b in buttons if b.value == "Revert to saved")
+        assert drawn.index(save) < drawn.index(revert)
+
+
+def test_the_unsaved_lines_say_when_the_draft_differs_from_the_saved_config(
+    tmp_path: Path,
+) -> None:
+    model = _model(tmp_path)
+    cloud = {"speech": {"module": {"type": "cloud-voice", "voice_id": "v"}}}
+    with gr.Blocks() as page:
+        setup_panel(model)
+    on_draft, on_save = _handler(page, "on_draft"), _handler(page, "on_save")
+
+    assert on_draft(DEFAULTS, 1) == ("", "")
+    assert on_draft(cloud, 1) == (UNSAVED_TOP, UNSAVED_BOTTOM)
+    assert on_draft(cloud, 0) == ("", "")  # the draft not loaded yet: nothing to say
+    assert unsaved_notice(model, cloud) == UNSAVED_SESSION
+    assert unsaved_notice(model, {}) == ""
+
+    notice, _, *lines = on_save(cloud, 0, 1)
+
+    assert notice == "✅ Saved." and lines == ["", ""]
+    assert on_draft(DEFAULTS, 1) == (UNSAVED_TOP, UNSAVED_BOTTOM)
+    assert unsaved_notice(model, cloud) == ""
+    # A config with a problem is saved all the same, nothing lost, and Save says it
+    # cannot run yet.
+    no_voice = {"speech": {"module": {"type": "cloud-voice"}}}
+    notice, _, *lines = on_save(no_voice, 1, 1)
+    assert notice.startswith("⚠️ Saved, with 1 problem in the config")
+    assert model.saved_config() == no_voice and lines == ["", ""]
+    model.save(cloud)
+    # Another tab saved: this tab's timer sees its draft differ now.
+    model.save(DEFAULTS)
+    assert _handler(page, "on_tick")(cloud, 1, 0, None)[3:5] == [
+        UNSAVED_TOP,
+        UNSAVED_BOTTOM,
     ]
+
+
+def _listeners(page: gr.Blocks, component: Any) -> dict[str, Any]:
+    """The function each event of *component* runs, by event name."""
+    return {
+        event: f
+        for f in page.fns.values()
+        for target, event in f.targets
+        if target == component._id
+    }
+
+
+def _environ(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    """An empty process environment, where the store puts its keys and the fake library
+    reads them."""
+    environ: dict[str, str] = {}
+    monkeypatch.setattr(os, "environ", environ)
+    return environ
+
+
+def test_a_field_left_checks_its_section_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model = _model(tmp_path, environ=_environ(monkeypatch))
+    model.secrets.set("OTHER_KEY", "s3cret")
+    cloud = {"speech": {"module": {"type": "cloud-voice", "voice_id": "v"}}}
+
+    # The form as the panel draws it, with the section's `edited` counter.
+    with gr.Blocks() as form:
+        draft, edited = gr.State(cloud), gr.State(0)
+        revision = gr.Number(0, precision=0, visible=False)
+        render_section(model, "speech", cloud, draft, revision, edited)
+    key_env = next(
+        b for b in form.blocks.values() if getattr(b, "label", None) == "api_key_env"
+    )
+    listeners = _listeners(form, key_env)
+    with gr.Blocks() as panel:
+        setup_panel(model)
+    (on_edited,) = _handlers(panel, "on_edited")
+
+    # Each keystroke writes the value without counting an edit; leaving the field or
+    # pressing Enter writes it and counts one, which checks the section again.
+    typed = listeners["input"].fn("OTHER_KEY", cloud)
+    left, count = listeners["blur"].fn("OTHER_KEY", cloud, 0)
+    assert typed == left
+    assert listeners["submit"].fn is listeners["blur"].fn
+    assert count == 1 and edited in listeners["blur"].outputs
+
+    _, summary, items = on_edited(left)
+    key = next(i for i in items if i.id == "key:OTHER_KEY")
+    assert key.status == "ready" and summary == "✅ **Ready**"
+    assert on_edited(cloud)[2][-1].status == "missing"  # CLOUD_VOICE_KEY, unset
+
+
+def test_the_timer_checks_again_after_a_key_was_saved_and_only_then(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model = _model(tmp_path, environ=_environ(monkeypatch))
+    cloud = {"speech": {"module": {"type": "cloud-voice", "voice_id": "v"}}}
+    with gr.Blocks() as page:
+        setup_panel(model)
+    tick = _handler(page, "on_tick")
+    seen = model.secrets.revision
+
+    # Nothing written since the tab looked: no check, its seen revision kept.
+    quiet = tick(cloud, 1, seen, None)
+    assert all(
+        isinstance(u, dict) and u.get("__type__") == "update" for u in quiet[5:-1]
+    )
+
+    model.secrets.set("CLOUD_VOICE_KEY", "s3cret")  # from the Secrets panel, say
+    seen_now, problems, summary, items = tick(cloud, 1, seen, None)[5:-2]
+
+    assert seen_now == model.secrets.revision != seen
+    assert "valid" in problems and summary == "✅ **Ready**"
+    assert all(i.status == "ready" for i in items)
+    # Seen: the next tick checks nothing again.
+    assert tick(cloud, 1, seen_now, None)[6:-1] == quiet[6:-1]
 
 
 def test_a_field_not_set_shows_its_default_greyed_and_a_set_one_its_value(
@@ -292,50 +478,78 @@ def test_a_field_not_set_shows_its_default_greyed_and_a_set_one_its_value(
     assert "Not set" not in filled["loud"].info
 
 
-def test_prepare_all_runs_the_rows_side_by_side_each_ending_on_its_own(
+def test_the_rows_timer_runs_only_while_a_line_is_acted_on(tmp_path: Path) -> None:
+    lib = SpeechLib()
+    lib.gate = threading.Event()
+    model = _model(tmp_path, sections=(Section("speech", lib),))
+    with gr.Blocks() as page:
+        setup_panel(model)
+    tick = _handler(page, "on_rows_tick")  # one for the whole panel
+    on_button = _handlers(page, "on_button")[0]  # one per row; the row given below
+    items = tuple(model.check_setup(DEFAULTS))
+    weights = next(i for i, item in enumerate(items) if item.id == "weights:Ada")
+
+    # At rest: nothing sent, and the timer turns itself off.
+    *rows, timer = tick(items)
+    assert rows == [gr.skip()] * len(rows) and timer.active is False
+
+    # A line's Prepare turns the timer on; each tick sends that line only.
+    assert on_button(items, DEFAULTS, index=weights)[-1].active is True
+    *rows, timer = tick(items)
+    sent = [i for i, update in enumerate(rows) if update != gr.skip()]
+    assert sent == [2 * weights, 2 * weights + 1]
+    assert "⏳ <strong>Preparing" in rows[2 * weights] and timer.active is True
+
+    # Done: the last tick shows how it ended, and turns the timer off.
+    lib.gate.set()
+    _wait(lambda: lib.downloaded == {"Ada"})
+    _wait(lambda: tick(items)[-1].active is False)
+    assert "✅ <strong>Ready</strong>" in tick(items)[2 * weights]
+
+
+def test_prepare_all_runs_the_lines_side_by_side_each_ending_on_its_own(
     tmp_path: Path,
 ) -> None:
     lib = SpeechLib()
     lib.gate = threading.Event()
     lib.failing = {"weights:Ada"}
     model = _model(tmp_path, sections=(Section("speech", lib),))
-    preparations = _Preparations(model)
+    actions = _Actions(model)
     weights, lexicon = model.to_prepare(DEFAULTS)
 
     for item in (weights, lexicon):
-        assert preparations.start(DEFAULTS, item)
-    assert not preparations.start(DEFAULTS, weights)  # never twice at once
+        assert actions.start(DEFAULTS, item)
+    assert not actions.start(DEFAULTS, weights)  # never twice at once
     _wait(lambda: len(lib.started) == 2)
 
-    # Both running at once, each row on its own progress, its Prepare disabled.
+    # Both running at once, each line on its own progress, its Prepare disabled.
     for item in (weights, lexicon):
-        text, button = _row(preparations, item)
-        assert "⏳" in text and "Starting" in text
+        status, explanation, button = _line(actions, item)
+        assert status == "⏳ **Preparing… 0%**" and "Starting" in explanation
         assert button == {"visible": True, "interactive": False}
-    assert preparations.running("speech")
+    assert actions.running("speech")
 
     lib.gate.set()
-    _wait(lambda: not preparations.running("speech"))
+    _wait(lambda: not actions.running("speech"))
 
-    failed_text, failed_button = _row(preparations, weights)
-    ready_text, ready_button = _row(preparations, lexicon)
-    assert failed_text.startswith(
-        "**Voice Ada** — ❌ Failed: Could not get weights:Ada"
-    )
+    failed_status, failed_why, failed_button = _line(actions, weights)
+    ready_status, _, ready_button = _line(actions, lexicon)
+    assert failed_status == "❌ **Failed**"
+    assert failed_why.startswith("Could not get weights:Ada")
     assert failed_button == {"visible": True, "interactive": True}  # tried again
-    assert ready_text == "**Lexicon** — ✅ Ready."
+    assert ready_status == "✅ **Ready**"
     assert ready_button["visible"] is False
     assert lib.lexicon and "Ada" not in lib.downloaded
 
 
-def test_a_busy_section_disables_its_rows(tmp_path: Path) -> None:
+def test_a_busy_section_disables_its_lines(tmp_path: Path) -> None:
     model = _model(tmp_path)
-    preparations = _Preparations(model)
+    actions = _Actions(model)
     [_, lexicon] = model.to_prepare(DEFAULTS)
 
-    preparations.busy.add("speech")  # a Check, an Install or a Test running
+    actions.busy.add("speech")  # a Check, an Install all or a Test running
 
-    assert _row(preparations, lexicon)[1] == {"visible": True, "interactive": False}
+    assert _line(actions, lexicon)[2] == {"visible": True, "interactive": False}
 
 
 def _wait(condition: Callable[[], bool]) -> None:
@@ -343,3 +557,249 @@ def _wait(condition: Callable[[], bool]) -> None:
     while not condition():
         assert time.monotonic() < deadline, "timed out"
         time.sleep(0.01)
+
+
+@pytest.fixture
+def installer(monkeypatch: pytest.MonkeyPatch) -> "FakeInstaller":
+    """The host's extras faked (`speech-local` carries the local voice's extra, which is
+    missing), and an installer that records each run and waits on a gate a test opens."""
+    carriers = {
+        "speech-lib[local-voice]": "speech-local",
+        "speech-lib[cloud-voice]": "speech-cloud",
+        "speech-lib[gate]": "speech-gate",
+    }
+    monkeypatch.setattr(
+        app_module,
+        "host_extras",
+        lambda requirement, *, host: (
+            (carriers[requirement],) if requirement in carriers else ()
+        ),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "requirement_status",
+        lambda requirement: RequirementStatus(requirement, "missing"),
+    )
+    fake = FakeInstaller()
+    monkeypatch.setattr(app_module, "find_installer", lambda host: fake)
+    return fake
+
+
+class FakeInstaller:
+    def __init__(self) -> None:
+        self.runs: list[list[str]] = []
+        self.gates: list[threading.Event] = []
+        self.fail = False
+
+    def install(self, extras: list[str], on_output: Any = None) -> int:
+        gate = threading.Event()
+        self.gates.append(gate)
+        self.runs.append(list(extras))
+        if on_output is not None:
+            on_output(f"Resolved {len(extras)} extra(s)")
+        assert gate.wait(timeout=5), "the test never opened the gate"
+        return 1 if self.fail else 0
+
+
+class TwoExtras(SpeechLib):
+    """A library whose config needs two extras, both missing."""
+
+    def check_setup(
+        self, config: dict[str, Any], *, base_dir: str | None = None
+    ) -> list[dict[str, Any]]:
+        gate = {
+            "id": "extra:speech-lib[gate]",
+            "title": "gate extra",
+            "status": "missing",
+            "detail": "pip install 'speech-lib[gate]'",
+            "preparable": False,
+            "required": True,
+        }
+        return [gate, *super().check_setup(config, base_dir=base_dir)]
+
+
+def _table(model: AppModel, actions: _Actions) -> gr.Blocks:
+    """A section's table drawn and wired in a page, with what a check updates."""
+    with gr.Blocks() as page:
+        draft = gr.State({})
+        checked = gr.State(())
+        checks = (gr.Markdown(), gr.Markdown(), checked)
+
+        def reports(config: dict[str, Any]) -> tuple[Any, ...]:
+            return "", "", tuple(model.check_setup(config, ["speech"]))
+
+        _wire_table(
+            model, actions, _draw_rows(), draft, checked, checks, reports, gr.Timer(0.5)
+        )
+    return page
+
+
+def _row(updates: list[Any], index: int) -> list[Any]:
+    """Row *index*'s updates in `_table_lines`: shown, its cells (the item, its status,
+    its explanation), its button, its key field, its key's Save."""
+    start = 1 + 5 * index
+    return updates[start : start + 5]
+
+
+def test_the_table_has_a_line_per_item_with_its_action(
+    tmp_path: Path, installer: FakeInstaller, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lib = SpeechLib()
+    lib.installed["local-voice"] = False
+    model = _model(tmp_path, sections=(Section("speech", lib),))
+    cloud = {"speech": {"module": {"type": "cloud-voice", "voice_id": "v"}}}
+    _environ(monkeypatch)
+    actions = _Actions(model)
+
+    local = _table_lines(actions, model.check_setup(DEFAULTS))
+    keyed_items = model.check_setup(cloud)
+    keyed = _table_lines(actions, keyed_items)
+
+    assert local[0]["visible"] is True  # the header
+    shown, cells, button, key, save = _row(local, 0)
+    assert shown["visible"] and "<strong>local-voice extra</strong>" in cells
+    assert "❌ <strong>Missing – required</strong>" in cells
+    assert (
+        "pip install &#x27;speech-lib[local-voice]&#x27; <strong>Install</strong> adds "
+        "it (the <code>speech-local</code> extra)."
+    ) in cells
+    assert (button["value"], button["visible"]) == ("Install", True)
+    assert (key["visible"], save["visible"]) == (False, False)
+    assert _row(local, 1)[0]["visible"] is False  # one item: the other rows hidden
+    # The cloud voice's extra is there; its key is missing: a field and Save, no button.
+    index = next(i for i, item in enumerate(keyed_items) if item.variable)
+    _, cells, button, key, save = _row(keyed, index)
+    assert "<strong>CLOUD_VOICE_KEY</strong>" in cells
+    assert key["visible"] and key["placeholder"] == "CLOUD_VOICE_KEY"
+    assert key["value"] == "" and save["visible"] and not button["visible"]
+    # Checked again with the same items: a key being typed on its line is kept.
+    again = _row(_table_lines(actions, keyed_items, keyed_items), index)
+    assert "value" not in again[3]
+
+
+def test_the_rows_are_drawn_once_so_no_listener_is_ever_dropped(
+    tmp_path: Path,
+) -> None:
+    model = _model(tmp_path)
+    with gr.Blocks() as page:
+        setup_panel(model)
+    before = set(page.fns)
+
+    # The table's rows and their listeners are the page's own, not a render's: a check,
+    # whatever it finds, adds or removes none.
+    assert _handlers(page, "on_rows_tick") and _handlers(page, "on_button")
+    assert set(page.fns) == before
+    for fn in page.fns.values():
+        name = getattr(fn.fn, "__name__", "")
+        if name in ("on_rows_tick", "on_button", "on_save_key", "on_checked"):
+            assert fn.rendered_in is None
+
+
+def test_installs_run_one_at_a_time_the_second_waiting_its_turn(
+    tmp_path: Path, installer: FakeInstaller
+) -> None:
+    lib = TwoExtras()
+    lib.installed["local-voice"] = False
+    model = _model(tmp_path, sections=(Section("speech", lib),))
+    actions = _Actions(model)
+    gate, local = model.check_setup(DEFAULTS)[:2]
+
+    first = actions.install([gate], ["speech-gate"])
+    _wait(lambda: len(installer.runs) == 1)
+    second = actions.install([local], ["speech-local"])
+    assert first is not None and second is not None
+    assert actions.install([local], ["speech-local"]) is None  # never twice at once
+
+    status, explanation, _ = _line(actions, gate)
+    assert status == "⏳ **Installing…**"
+    assert explanation.startswith(
+        "uv: Resolved 1 extra(s) ("
+    )  # uv's latest line, the time
+    assert _line(actions, local)[:2] == (
+        "⏳ **Waiting**",
+        "Waiting for another install…",
+    )
+    assert _line(actions, local)[2]["interactive"] is False
+
+    installer.gates[0].set()
+    _wait(lambda: len(installer.runs) == 2)  # the second starts once the first is done
+    assert _line(actions, gate)[:2] == ("✅ **Ready**", "Installed.")
+    assert _line(actions, local)[0] == "⏳ **Installing…**"
+    installer.fail = True
+    installer.gates[1].set()
+    assert second.done.wait(timeout=5)
+
+    assert installer.runs == [["speech-gate"], ["speech-local"]]
+    assert _line(actions, local)[:2] == (
+        "❌ **Failed**",
+        "uv exited with code 1. **Install** tries again.",
+    )
+
+
+def test_install_all_installs_every_missing_extra_in_one_run(
+    tmp_path: Path, installer: FakeInstaller
+) -> None:
+    lib = TwoExtras()
+    lib.installed["local-voice"] = False
+    model = _model(tmp_path, sections=(Section("speech", lib),))
+    with gr.Blocks() as page:
+        setup_panel(model)
+    install_all = _handler(page, "on_install_all")(DEFAULTS)
+
+    first = next(install_all)
+    _wait(lambda: len(installer.runs) == 1)
+    installer.gates[0].set()
+    *_, (output, _, summary, _) = [first, *install_all]
+
+    assert installer.runs == [["speech-gate", "speech-local"]]
+    assert output["value"].startswith("Installing: speech-gate, speech-local")
+    assert output["value"].endswith("Done.")
+    assert summary.startswith("❌ **2 required items missing**")  # the fake stays so
+
+
+def test_an_extra_installed_from_its_line_checks_the_section_again(
+    tmp_path: Path, installer: FakeInstaller
+) -> None:
+    lib = SpeechLib()
+    lib.installed["local-voice"] = False
+    model = _model(tmp_path, sections=(Section("speech", lib),))
+    actions = _Actions(model)
+    page = _table(model, actions)
+    on_button = _handlers(page, "on_button")[0]  # one per row; the row given below
+    items = tuple(model.check_setup(DEFAULTS))
+
+    def release() -> None:
+        _wait(lambda: len(installer.runs) == 1)
+        lib.installed["local-voice"] = True  # what the install did
+        installer.gates[0].set()
+
+    threading.Thread(target=release).start()
+    updates = on_button(items, DEFAULTS, index=0)
+    # One value per output: the line's cells and button, the section's checks, the timer.
+    assert len(updates) == 6
+    *_, items, _ = updates
+
+    assert installer.runs == [["speech-local"]]
+    assert items[0].status == "ready"
+
+
+def test_a_key_saved_on_its_line_reaches_the_store_and_turns_ready(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    environ = _environ(monkeypatch)
+    model = _model(tmp_path, environ=environ)
+    cloud = {"speech": {"module": {"type": "cloud-voice", "voice_id": "v"}}}
+    page = _table(model, _Actions(model))
+    on_save_key = _handlers(page, "on_save_key")[0]  # one per row; the row given below
+    shown = tuple(model.check_setup(cloud))
+    index = next(i for i, item in enumerate(shown) if item.variable)
+    seen = model.secrets.revision
+
+    cleared, _, _, items = on_save_key("s3cret", shown, cloud, index=index)
+
+    assert cleared == ""  # the value is never shown back
+    assert model.secrets.file_names() == ["CLOUD_VOICE_KEY"]
+    assert environ["CLOUD_VOICE_KEY"] == "s3cret"
+    assert model.secrets.revision != seen  # every tab checks again
+    key = next(i for i in items if i.variable == "CLOUD_VOICE_KEY")
+    assert key.status == "ready"

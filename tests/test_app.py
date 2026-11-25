@@ -153,16 +153,18 @@ def test_a_section_with_problems_still_says_which_extra_to_install(
     # The voice id is missing, and the voice list that would fill it needs the extra:
     # the extra must be installable before the config is right.
     lib.check_setup = None  # type: ignore[assignment] - never asked
-    model = _model(tmp_path, lib)
+    # The key is set: its line is ready, and only the extra is missing.
+    model = _model(tmp_path, lib, environ={"CLOUD_VOICE_KEY": "k"})
     unfinished = {"speech": {"module": {"type": "cloud-voice"}}}
 
-    [item] = model.check_setup(unfinished)
+    item, key = model.check_setup(unfinished)
 
     assert (item.id, item.status, item.host_extras) == (
         "extra:speech-lib[cloud-voice]",
         "missing",
         ("speech-cloud",),
     )
+    assert (key.id, key.status) == ("key:CLOUD_VOICE_KEY", "ready")
     assert model.missing_extras(unfinished) == ["speech-cloud"]
     assert model.blockers(unfinished) == [
         "/speech/module/voice_id: voice_id is required",
@@ -174,7 +176,7 @@ def test_a_section_with_problems_still_says_which_extra_to_install(
         "requirement_status",
         lambda requirement: RequirementStatus(requirement, "installed"),
     )
-    [installed] = model.check_setup(unfinished)
+    installed, _ = model.check_setup(unfinished)
     assert (installed.status, installed.installable) == ("ready", False)
 
 
@@ -390,6 +392,60 @@ def test_the_secrets_the_config_names_and_where_they_come_from(
     assert model.secret_variables(DEFAULTS) == []
 
 
+def test_a_key_item_is_told_the_variable_it_is_about(
+    tmp_path: Path, lib: SpeechLib
+) -> None:
+    model = _model(tmp_path, lib)
+    cloud = {
+        "speech": {"module": {"type": "cloud-voice", "voice_id": "v"}},
+    }
+    renamed = {
+        "speech": {
+            "module": {"type": "cloud-voice", "voice_id": "v", "api_key_env": "MY_KEY"}
+        },
+    }
+
+    def variables(config: dict[str, Any]) -> dict[str, str | None]:
+        return {item.id: item.variable for item in model.check_setup(config)}
+
+    assert variables(cloud) == {
+        "extra:speech-lib[cloud-voice]": None,
+        "key:CLOUD_VOICE_KEY": "CLOUD_VOICE_KEY",
+    }
+    assert variables(renamed)["key:MY_KEY"] == "MY_KEY"
+    # Files are not keys, nor is an extra.
+    assert set(variables(DEFAULTS).values()) == {None}
+
+
+def test_a_key_is_asked_for_while_the_config_still_has_problems(
+    tmp_path: Path, lib: SpeechLib
+) -> None:
+    # The library is not asked about a config with problems, yet the key it names is known
+    # from the schema: the user learns of it before fixing the missing field, not after.
+    unset = _model(tmp_path / "unset", lib)
+    in_shell = _model(tmp_path / "shell", lib, environ={"CLOUD_VOICE_KEY": "k"})
+    no_voice = {"speech": {"module": {"type": "cloud-voice"}}}
+
+    items = {item.id: item for item in unset.check_setup(no_voice)}
+    key = items["key:CLOUD_VOICE_KEY"]
+
+    assert set(items) == {"extra:speech-lib[cloud-voice]", "key:CLOUD_VOICE_KEY"}
+    assert (key.status, key.required, key.variable) == (
+        "missing",
+        True,
+        "CLOUD_VOICE_KEY",
+    )
+    assert "CLOUD_VOICE_KEY" in key.detail
+    # Start names both: the field to fill in and the key to set.
+    blockers = unset.blockers(no_voice)
+    assert any("voice_id" in line for line in blockers)
+    assert any("CLOUD_VOICE_KEY" in line for line in blockers)
+    shell_key = next(
+        item for item in in_shell.check_setup(no_voice) if item.id.startswith("key:")
+    )
+    assert shell_key.status == "ready"
+
+
 def test_building_the_model_makes_the_folder_ready_and_loads_its_secrets(
     tmp_path: Path, lib: SpeechLib, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -442,6 +498,21 @@ def test_the_config_cannot_change_while_the_app_locks_it(
     assert model.saved_config() == cloud
     assert model.reset() == DEFAULTS
     assert not _model(tmp_path, lib).locked()  # no lock given: never locked
+
+
+def test_a_draft_is_unsaved_until_it_is_saved(tmp_path: Path, lib: SpeechLib) -> None:
+    model = _model(tmp_path, lib)
+    cloud = {"speech": {"module": {"type": "cloud-voice", "voice_id": "v"}}}
+    # A change outside the sections the config uses still has to be saved.
+    unused = {**DEFAULTS, "backup": {"module": {"type": "cloud-voice"}}}
+
+    assert not model.unsaved(DEFAULTS)
+    assert model.unsaved(cloud)
+    assert model.unsaved(unused)
+
+    model.save(cloud)
+    assert not model.unsaved(cloud)
+    assert model.unsaved(DEFAULTS)
 
 
 def test_probe_and_options_reach_the_section_s_contract(

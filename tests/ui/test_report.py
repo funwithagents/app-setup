@@ -4,7 +4,7 @@ from app_setup.ui.report import (
     Progress,
     config_report,
     env_file_rows,
-    item_line,
+    item_status,
     secrets_report,
     setup_summary,
 )
@@ -35,51 +35,91 @@ LEXICON = SetupItem("speech", "lexicon", "Lexicon", "missing", "Not built.", Tru
 KEY = SetupItem("speech", "key:K", "K", "ready", "Set.", False, True)
 
 
-def test_the_summary_tells_what_blocks_from_what_the_first_start_will_prepare() -> None:
-    assert (
-        setup_summary([]) == "✅ **This machine needs nothing more for this config.**"
+def test_the_summary_says_it_in_the_table_s_words() -> None:
+    assert setup_summary([]) == "✅ **Ready**"
+    assert setup_summary([KEY]) == "✅ **Ready**"
+    assert setup_summary([EXTRA, VOICE, KEY]) == (
+        "❌ **1 required item missing** — 1 optional item missing: the first start "
+        "will get them, slower"
     )
-    assert setup_summary([KEY]) == "✅ **This machine is ready for this config.**"
-    assert setup_summary([EXTRA, VOICE, KEY]).startswith(
-        "❌ **1 thing(s) missing on this machine.** 1 thing(s) not prepared yet"
-    )
-    assert setup_summary([VOICE, KEY]) == (
-        "✅ **This machine can run this config.** 1 thing(s) not prepared yet: the "
-        "first start will prepare them itself, and be slower."
+    assert setup_summary([EXTRA, LEXICON]) == "❌ **2 required items missing**"
+    assert setup_summary([VOICE, VOICE, KEY]) == (
+        "✅ **Ready to run** — 2 optional items missing: the first start will get "
+        "them, slower"
     )
 
 
-def test_each_item_row_says_its_state_and_what_to_do() -> None:
-    assert item_line(EXTRA) == (
-        "**X extra** — ❌ Missing. Not installed. **Install missing extras** installs it "
-        "(`speech-x`)."
+def test_each_line_says_its_status_and_why() -> None:
+    missing_key = SetupItem(
+        "speech", "key:K", "K", "missing", "Not set.", False, True, variable="K"
     )
-    assert (
-        item_line(LEXICON)
-        == "**Lexicon** — ❌ Missing. Not built. **Prepare** gets it."
+    unknown = SetupItem(
+        "speech", "gpu", "GPU", "unknown", "Cannot tell yet.", True, True
     )
-    assert item_line(VOICE) == (
-        "**Voice Ada** — ⏳ Not prepared yet. Not downloaded. The first start will "
-        "prepare it itself and be slower; **Prepare** does it now."
+
+    assert item_status(EXTRA) == (
+        "❌ **Missing – required**",
+        "Not installed. **Install** adds it (the `speech-x` extra).",
     )
-    assert item_line(KEY) == "**K** — ✅ Ready. Set."
+    assert item_status(LEXICON) == (
+        "❌ **Missing – required**",
+        "Not built. **Prepare** gets it.",
+    )
+    assert item_status(missing_key) == (
+        "❌ **Missing – required**",
+        "Not set. Type `K` here, or in the Secrets panel.",
+    )
+    assert item_status(VOICE) == (
+        "🟡 **Missing – optional**",
+        "Not downloaded. Without it, the first start gets it itself and is slower.",
+    )
+    assert item_status(KEY) == ("✅ **Ready**", "Set.")
+    assert item_status(unknown) == ("❔ **Can't tell**", "Cannot tell yet.")
 
 
-def test_a_row_being_prepared_shows_its_progress_then_how_it_ended() -> None:
-    measured = Progress(True, 0.5, "Downloading 150 of 300 MB", 3.0)
+def test_a_line_being_acted_on_shows_its_progress_then_how_it_ended() -> None:
+    measured = Progress(True, 0.4, "Downloading 120 of 300 MB", 3.0)
     unmeasured = Progress(True, None, "Building the cache", 12.4)
+    installing = Progress(True, None, "Downloading torch (120 MB)", 5.2, install=True)
+    waiting = Progress(True, None, "", 1.0, install=True, waiting=True)
 
-    assert item_line(VOICE, measured) == (
-        "**Voice Ada** — ⏳ `▓▓▓▓▓▓░░░░░░` 50% · Downloading 150 of 300 MB"
+    assert item_status(VOICE, measured) == (
+        "⏳ **Preparing… 40%**",
+        "`▓▓▓▓▓░░░░░░░` Downloading 120 of 300 MB",
     )
-    assert (
-        item_line(VOICE, unmeasured) == "**Voice Ada** — ⏳ Building the cache (12 s)"
+    assert item_status(VOICE, unmeasured) == (
+        "⏳ **Preparing…**",
+        "Building the cache (12 s)",
     )
-    assert item_line(VOICE, Progress(False, 1.0, "Ready.", 9.0, ok=True)) == (
-        "**Voice Ada** — ✅ Ready."
+    assert item_status(EXTRA, installing) == (
+        "⏳ **Installing…**",
+        # uv's own words, marked as such: "Downloading" alone reads as another action.
+        "uv: Downloading torch (120 MB) (5 s)",
     )
-    assert item_line(VOICE, Progress(False, 0.2, "Unreachable.", 2.0, ok=False)) == (
-        "**Voice Ada** — ❌ Failed: Unreachable. **Prepare** tries again."
+    assert item_status(EXTRA, waiting) == (
+        "⏳ **Waiting**",
+        "Waiting for another install…",
+    )
+    assert item_status(VOICE, Progress(False, 1.0, "", 9.0, ok=True)) == (
+        "✅ **Ready**",
+        "Prepared.",
+    )
+    assert item_status(
+        EXTRA, Progress(False, None, "", 9.0, ok=True, install=True)
+    ) == (
+        "✅ **Ready**",
+        "Installed.",
+    )
+    assert item_status(VOICE, Progress(False, 0.2, "Unreachable.", 2.0, ok=False)) == (
+        "❌ **Failed**",
+        "Unreachable. **Prepare** tries again.",
+    )
+    failed = Progress(
+        False, None, "uv exited with code 1.", 2.0, ok=False, install=True
+    )
+    assert item_status(EXTRA, failed) == (
+        "❌ **Failed**",
+        "uv exited with code 1. **Install** tries again.",
     )
 
 

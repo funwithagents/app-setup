@@ -12,9 +12,10 @@ from app_setup.app import Problem, SetupItem
 from app_setup.secrets import SecretVariable
 
 __all__ = [
+    "HEADER",
     "Progress",
     "config_report",
-    "item_line",
+    "item_status",
     "secrets_report",
     "setup_summary",
 ]
@@ -34,35 +35,39 @@ def config_report(problems: Sequence[Problem]) -> str:
     return "\n".join(lines)
 
 
+def _count(n: int, what: str) -> str:
+    return f"{n} {what}{'' if n == 1 else 's'}"
+
+
 def setup_summary(items: Sequence[SetupItem]) -> str:
-    """One line over a section's item rows: whether this machine can run its config."""
-    if not items:
-        return "✅ **This machine needs nothing more for this config.**"
+    """One line over a section's table, in the table's words: whether this machine can run
+    its config."""
     blocking = [item for item in items if item.blocking]
     deferred = [item for item in items if item.deferred]
+    optional = (
+        f"{_count(len(deferred), 'optional item')} missing: the first start will get "
+        "them, slower"
+    )
     if blocking:
-        line = f"❌ **{len(blocking)} thing(s) missing on this machine.**"
-    elif deferred:
-        line = "✅ **This machine can run this config.**"
-    else:
-        line = "✅ **This machine is ready for this config.**"
+        line = f"❌ **{_count(len(blocking), 'required item')} missing**"
+        return line + (f" — {optional}" if deferred else "")
     if deferred:
-        line += (
-            f" {len(deferred)} thing(s) not prepared yet: the first start will prepare "
-            "them itself, and be slower."
-        )
-    return line
+        return f"✅ **Ready to run** — {optional}"
+    return "✅ **Ready**"
 
 
 @dataclass(frozen=True)
 class Progress:
-    """What an item's row shows of its preparation: running, or how it ended."""
+    """What an item's line shows of an action on it (a preparation, an install): running,
+    waiting its turn, or how it ended."""
 
     running: bool
-    fraction: float | None  # the share done, None when the library cannot measure
-    message: str  # the library's latest words, or the failure's message
+    fraction: float | None  # the share done, None when it cannot be measured
+    message: str  # the latest words (the library's, uv's), or the failure's message
     elapsed_s: float
     ok: bool | None = None  # None while running
+    install: bool = False  # an install, not a preparation
+    waiting: bool = False  # an install queued behind another
 
 
 _BAR = 12
@@ -73,37 +78,61 @@ def _bar(fraction: float) -> str:
     return "▓" * done + "░" * (_BAR - done)
 
 
-def item_line(item: SetupItem, progress: Progress | None = None) -> str:
-    """An item's row: its title, its state in plain words, its detail and what to do;
-    while it is prepared, its progress; once prepared, how it ended."""
-    title = f"**{item.title}**"
-    if progress is not None and progress.running:
-        if progress.fraction is not None:
-            return (
-                f"{title} — ⏳ `{_bar(progress.fraction)}` {progress.fraction:.0%} · "
-                f"{progress.message}"
-            )
-        doing = progress.message or "Preparing"
-        return f"{title} — ⏳ {doing} ({progress.elapsed_s:.0f} s)"
-    if progress is not None and progress.ok:
-        return f"{title} — ✅ Ready."
-    if progress is not None and progress.ok is False:
-        return f"{title} — ❌ Failed: {progress.message} **Prepare** tries again."
-    if item.status == "ready":
-        return f"{title} — ✅ Ready. {item.detail}".rstrip()
-    if item.status == "unknown":
-        return f"{title} — ❔ Unknown. {item.detail}".rstrip()
-    if not item.required:
-        return (
-            f"{title} — ⏳ Not prepared yet. {item.detail} The first start will prepare "
-            "it itself and be slower; **Prepare** does it now."
-        )
-    todo = ""
+HEADER = ("**Item**", "**Status**", "**Explanation**", "**Action**")
+OPTIONAL = "Without it, the first start gets it itself and is slower."
+
+
+def _todo(item: SetupItem) -> str:
+    """What to do about a missing required item, after its detail."""
     if item.installable:
-        todo = f" **Install missing extras** installs it (`{item.host_extras[0]}`)."
-    elif item.preparable:
-        todo = " **Prepare** gets it."
-    return f"{title} — ❌ Missing. {item.detail}{todo}"
+        return f"**Install** adds it (the `{item.host_extras[0]}` extra)."
+    if item.variable is not None:
+        return f"Type `{item.variable}` here, or in the Secrets panel."
+    if item.preparable:
+        return "**Prepare** gets it."
+    return ""
+
+
+def _join(*parts: str) -> str:
+    return " ".join(part for part in parts if part)
+
+
+def item_status(item: SetupItem, progress: Progress | None = None) -> tuple[str, str]:
+    """An item's line in the table: its status, short, and its explanation: the why, what
+    to do, or the progress of what is being done."""
+    if progress is not None:
+        verb, doing = (
+            ("Install", "Installing") if progress.install else ("Prepare", "Preparing")
+        )
+        if progress.waiting:
+            return "⏳ **Waiting**", "Waiting for another install…"
+        if progress.running and progress.fraction is not None:
+            return (
+                f"⏳ **{doing}… {progress.fraction:.0%}**",
+                f"`{_bar(progress.fraction)}` {progress.message}".rstrip(),
+            )
+        if progress.running:
+            # uv's own words ("Downloading numpy", "Prepared 3 packages") are marked as
+            # its: read alone they would name another action than the install.
+            message = (
+                f"uv: {progress.message}"
+                if progress.install and progress.message
+                else progress.message
+            )
+            return (
+                f"⏳ **{doing}…**",
+                _join(message, f"({progress.elapsed_s:.0f} s)"),
+            )
+        if progress.ok:
+            return "✅ **Ready**", "Installed." if progress.install else "Prepared."
+        return "❌ **Failed**", _join(progress.message, f"**{verb}** tries again.")
+    if item.status == "ready":
+        return "✅ **Ready**", item.detail
+    if item.status == "unknown":
+        return "❔ **Can't tell**", item.detail
+    if not item.required:
+        return "🟡 **Missing – optional**", _join(item.detail, OPTIONAL)
+    return "❌ **Missing – required**", _join(item.detail, _todo(item))
 
 
 SHADOWED = "✅ the shell (the folder's .env also sets it, unused)"

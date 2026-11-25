@@ -9,6 +9,7 @@ it, install, prepare, probe, and say why the config cannot run yet. Running it i
 from __future__ import annotations
 
 import copy
+import re
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -96,6 +97,8 @@ class SetupItem:
     required: bool
     # For an extra: the host's extras that install it ("" when none carries it).
     host_extras: tuple[str, ...] = field(default=())
+    # For a key: the environment variable it is about (a field to set it on its line).
+    variable: str | None = None
 
     @property
     def is_extra(self) -> bool:
@@ -184,6 +187,16 @@ def _extra_item(requirement: str) -> dict[str, Any]:
         "preparable": False,
         "required": True,
     }
+
+
+def _named(variables: Sequence[str], *texts: str) -> str | None:
+    """The first of *variables* one of *texts* names as a whole word: the variable a key
+    item is about (the contract gives an item no kind)."""
+    for variable in variables:
+        word = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(variable)}(?![A-Za-z0-9_])")
+        if any(word.search(text) for text in texts):
+            return variable
+    return None
 
 
 class AppModel:
@@ -287,6 +300,12 @@ class AppModel:
     def saved_config(self) -> dict[str, Any]:
         return self.folder.read_config()
 
+    def unsaved(self, draft: Mapping[str, Any]) -> bool:
+        """Whether *draft* differs from the saved config. The whole config is compared, not
+        only the sections it uses: Save writes the whole draft, a section not used keeps its
+        document, and a section's `when` may read keys outside the sections."""
+        return dict(draft) != self.saved_config()
+
     def save(self, config: Mapping[str, Any]) -> None:
         """Save *config* as the current one. Refused while the config is locked."""
         self._refuse_when_locked()
@@ -372,14 +391,60 @@ class AppModel:
                     copy.deepcopy(dict(document))
                 ):
                     found.append(self._item(name, _extra_item(requirement)))
+                # The keys too: the variables the document names are read from the
+                # schema, so a key is asked for while a field is still being filled in.
+                for key in self._key_items(name, document):
+                    found.append(self._item(name, key, [key["title"]]))
                 continue
+            description = self.description(name)
+            variables = (
+                [v for _, v in secret_variables(description.schema, document)]
+                if description is not None
+                else []
+            )
             for item in contract.check_setup(
                 copy.deepcopy(dict(document)), base_dir=self._base_dir
             ):
-                found.append(self._item(name, item))
+                found.append(self._item(name, item, variables))
         return found
 
-    def _item(self, section: str, item: Mapping[str, Any]) -> SetupItem:
+    def _key_items(
+        self, section: str, document: Mapping[str, Any]
+    ) -> list[dict[str, Any]]:
+        """A `check_setup` item per environment variable *document* names for a key, from
+        the schema and the environment alone: for a section whose config the library cannot
+        be asked about yet."""
+        description = self.description(section)
+        if description is None:
+            return []
+        items: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for path, variable in secret_variables(description.schema, document):
+            if variable in seen:
+                continue
+            seen.add(variable)
+            present = self.secrets.source(variable) != "missing"
+            items.append(
+                {
+                    "id": f"key:{variable}",
+                    "title": variable,
+                    "status": "ready" if present else "missing",
+                    "detail": "Set."
+                    if present
+                    else f"Set the environment variable {variable} (named by "
+                    f"'{path.rsplit('/', 1)[-1]}').",
+                    "preparable": False,
+                    "required": True,
+                }
+            )
+        return items
+
+    def _item(
+        self,
+        section: str,
+        item: Mapping[str, Any],
+        variables: Sequence[str] = (),
+    ) -> SetupItem:
         absent = [key for key in _ITEM_KEYS if key not in item]
         if absent:
             raise ContractError(
@@ -413,6 +478,9 @@ class AppModel:
             preparable=bool(item["preparable"]),
             required=bool(item["required"]),
             host_extras=carriers,
+            variable=None
+            if identifier.startswith("extra:") or item["preparable"]
+            else _named(variables, identifier, str(item.get("title", ""))),
         )
 
     def blockers(

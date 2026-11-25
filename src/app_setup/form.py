@@ -339,14 +339,24 @@ def select_branch(
 
 
 def toggle_group(
-    document: Mapping[str, Any], path: Path, enabled: bool
+    document: Mapping[str, Any],
+    path: Path,
+    enabled: bool,
+    choice: Choice | None = None,
 ) -> dict[str, Any]:
-    """*document* with the optional object at *path* switched on (an empty object, or the one
-    already there) or off (removed)."""
+    """*document* with the optional object at *path* switched on (the one already there, else
+    an empty object) or off (removed). An object carrying a module *choice*, switched on
+    empty, starts on its first module, so its dropdown and its fields show a module rather
+    than nothing."""
     if not enabled:
         return set_at(document, path, ABSENT)
     current = get_at(document, path)
-    return set_at(document, path, current if isinstance(current, Mapping) else {})
+    if isinstance(current, Mapping):
+        return set_at(document, path, current)
+    started: dict[str, Any] = {}
+    if choice is not None and choice.branches:
+        started[choice.discriminator] = choice.branches[0].value
+    return set_at(document, path, started)
 
 
 def secret_variables(schema: ObjectSpec, document: Any) -> list[tuple[str, str]]:

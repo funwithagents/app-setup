@@ -100,6 +100,9 @@ class SecretStore:
         )
         self._shell = {name for name, value in self._environ.items() if value}
         self._loaded: set[str] = set()
+        # Bumped by each write (`set`, `remove`): a page that is not told of a write
+        # compares it with the last one it saw, and checks the config again.
+        self.revision = 0
 
     def _file(self) -> dict[str, str]:
         try:
@@ -176,10 +179,12 @@ class SecretStore:
             raise ValueError("an empty value: remove the variable instead")
         self._rewrite(name, format_env(name, value))
         self.load()
+        self.revision += 1
         return self.source(name)
 
     def remove(self, name: str) -> Source:
         """Take *name* out of the file and the environment it fed."""
         self._rewrite(name, None)
         self.load()
+        self.revision += 1
         return self.source(name)

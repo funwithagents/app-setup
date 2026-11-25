@@ -107,6 +107,21 @@ def test_removing_a_variable_takes_it_out_of_the_file_and_the_environment(
     assert env_path.read_text() == "# keys\nB=2\n"
 
 
+def test_each_write_bumps_the_revision_a_page_compares(tmp_path: Path) -> None:
+    store = SecretStore(tmp_path / ".env", {})
+    seen = store.revision
+
+    store.set("API_KEY", "s3cret")
+    after_set = store.revision
+    with pytest.raises(ValueError):
+        store.set("API_KEY", "")  # refused: nothing written
+    store.load()  # a read, not a write
+    unchanged = store.revision
+    store.remove("API_KEY")
+
+    assert seen < after_set == unchanged < store.revision
+
+
 @pytest.mark.parametrize(
     ("name", "value"), [("1BAD", "x"), ("BAD-NAME", "x"), ("GOOD", "")]
 )

@@ -67,10 +67,11 @@ model = AppModel(APP, ConfigFolder(default_folder(APP.name), APP.default_config)
 |---|---|
 | `used(config, sections=None)` | The sections the config uses, in declaration order (only those of `sections`, when given) |
 | `saved_config()`, `save(config)`, `reset()` | Read, save, or reset to the default the config in the folder. `save` and `reset` raise `RuntimeError` while the config is locked |
+| `unsaved(draft)` | Whether a draft differs from the saved config: the whole config compared, not only the sections it uses (Save writes the whole draft, a section not used keeps its document, and `when` reads keys outside the sections) |
 | `locked()` | Whether the app is using the saved config |
 | `path` | The folder: where a section's relative paths resolve |
 | `check_config(config, sections=None)` | Every section's `check_config`, each problem as `Problem(section, path, message)`, the path a JSON Pointer into the app's config (`/speech/module/voice_id`). A used section absent from the config is a problem at `/<section>` |
-| `check_setup(config, sections=None)` | Every section's `check_setup`, each item as a `SetupItem`; a section whose document has problems is not asked, since the contract asks it only about a config `check_config` accepts: its extras come instead from its `required_extras` (which takes an incomplete config) and the installed packages' metadata, so an extra can be installed while the config is still being fixed — a field filled from a list the extra provides would otherwise never be filled. An extra's item is told which host extras install it (`host_extras`, from [extras.md](extras.md)); an extra unavailable on this platform says so and has none. A section whose library does not import is one missing item, installable by its `host_extra` |
+| `check_setup(config, sections=None)` | Every section's `check_setup`, each item as a `SetupItem`; a section whose document has problems is not asked, since the contract asks it only about a config `check_config` accepts: its extras come instead from its `required_extras` (which takes an incomplete config) and the installed packages' metadata, so an extra can be installed while the config is still being fixed — a field filled from a list the extra provides would otherwise never be filled; and one item per variable its document names for a key (the schema's `x-secret-env` fields, their defaults included), ready when set, so a key is asked for alongside the field still missing, not after it. An extra's item is told which host extras install it (`host_extras`, from [extras.md](extras.md)); an extra unavailable on this platform says so and has none. A section whose library does not import is one missing item, installable by its `host_extra` |
 | `missing_extras(config, sections=None)` | The host extras that install what is missing: the first carrier of each installable item |
 | `install(extras, on_output)` | Installs the host's extras with its installer; `InstallError` when the app cannot install (no lock, no uv). Sections whose library did not import are retried afterwards |
 | `prepare(config, items=None, on_progress=None)` | Makes the given `SetupItem`s ready, **all at the same time**, each on its own thread through its section's contract (`prepare(document, item.id, …)`); with `items=None`, every preparable item of the used sections that is not ready. `on_progress` receives each contract event with the item's `section` and `id` added. Blocks until every item is done and returns one `Prepared(item, ok, message)` per item: a failure is that item's outcome, with its message, and the others go on. Never raises for an item |
@@ -84,7 +85,7 @@ model = AppModel(APP, ConfigFolder(default_folder(APP.name), APP.default_config)
 
 The checks take an optional `sections`: the Setup panel asks about one section at a time, so its Check, Install, Prepare and Test act on that section alone.
 
-A `Prepared` is an item's outcome: `ok`, and the failure's message when not. A `SetupItem` is the contract's item (`required` included) with its `section` and `host_extras`; `installable` is true for a missing extra some host extra carries. An item breaking the contract's rules (a key missing, not required and not preparable) raises `ContractError` naming the section and the item: it is the library's bug, and shows in its own tests and demo.
+A `Prepared` is an item's outcome: `ok`, and the failure's message when not. A `SetupItem` is the contract's item (`required` included) with its `section` and `host_extras`; `installable` is true for a missing extra some host extra carries. `variable` names the environment variable a **key** item is about, so the Setup panel can offer a field to set it: the contract has one item per variable the config names for a key, not preparable and required, and gives it no kind ([module-contract.md](module-contract.md)), so an item that is neither an extra nor preparable is a key item when its `id` or `title` names, as a whole word, one of the variables its section's document names (`x-secret-env` fields, their defaults included); `None` for every other item. An item breaking the contract's rules (a key missing, not required and not preparable) raises `ContractError` naming the section and the item: it is the library's bug, and shows in its own tests and demo.
 
 The app's own Start uses the model this way: read `saved_config()`, refuse with `blockers(config)` when there are any, then build its runtime from `used_config(config)`, relative paths resolved against `path`. Before building, an app may prepare what the session would otherwise get by itself — `prepare(config, deferred(config), on_progress)`, its progress shown in the app's own session view — so the first use is not the slow one; whether it does is the app's choice (app-setup does not run a session).
 
@@ -94,14 +95,16 @@ The app's own Start uses the model this way: read `saved_config()`, refuse with 
 
 - problems pointed into the app's config; a missing section;
 - a missing extra told its host extra; unavailable on this platform; carried by no host extra;
+- a section with problems still listing its extras and the keys its document names;
 - files missing, prepared, then ready; one item prepared alone, the others left missing; two items prepared at the same time (each started before the other finished); progress events carrying the section and the id; one item failing, its outcome carrying the message, the other prepared;
 - a missing item that is not required listed in `deferred`, not in `blockers`; a malformed item refused;
 - a section the config does not use; a library that does not import, then does;
 - the install delegated to the installer, and refused without one;
-- the secrets named and their sources;
+- the secrets named and their sources; a key item told its variable, the other items none;
 - building the model writes the default config and loads the `.env` under the shell's variables;
 - the blockers of a config, then none once ready;
-- the config refused while the app locks it, and never locked without a lock.
+- the config refused while the app locks it, and never locked without a lock;
+- a draft unsaved until it is saved, a change to a section not used included.
 
 ## Open questions
 

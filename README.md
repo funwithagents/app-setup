@@ -14,7 +14,7 @@ import gradio as gr
 from app_setup.app import App, AppModel, Section
 from app_setup.autostart import add_start_arguments, starts_at_launch
 from app_setup.folder import ConfigFolder, default_folder
-from app_setup.ui import secrets_panel, setup_panel
+from app_setup.ui import secrets_panel, setup_panel, unsaved_notice
 
 import speech_lib.setup  # a library implementing the contract
 
@@ -34,11 +34,16 @@ model = AppModel(APP, ConfigFolder(default_folder(APP.name), APP.default_config)
 
 with gr.Blocks() as page:
     with gr.Tab("Session"):
+        unsaved = gr.Markdown()  # "The Setup tab has unsaved changes: Start uses the saved config."
         ...  # the app's own: Start (model.saved_config(), model.blockers(...)), Stop, its controls
     with gr.Tab("Setup"):
         setup = setup_panel(model)
     with gr.Tab("Secrets"):
         secrets_panel(model, setup.draft)
+
+    # The Setup panel's buttons try the form as it is; a session runs the saved config.
+    for event in (setup.draft.change, setup.saved.change):
+        event(lambda draft: unsaved_notice(model, draft), inputs=[setup.draft], outputs=[unsaved])
 
 # The flag, else the folder's launch.json (a checkbox on the Setup panel), else App.autostart.
 if starts_at_launch(model, options.start):

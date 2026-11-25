@@ -3,13 +3,15 @@
 Each panel is drawn where it is called, inside the app's own ``gr.Blocks`` (a tab, a column,
 an accordion), and brings its own state and events: the app decides what it shows and where.
 The config being edited (the draft) lives in each browser tab; the saved config and the
-secrets are the ``AppModel``'s, shared by every tab.
+secrets are the ``AppModel``'s, shared by every tab. A section's actions try the draft; a
+session uses the saved config: the Setup panel says so, and says when the two differ.
 """
 
 from __future__ import annotations
 
+import html
 import itertools
-import queue
+import re
 import threading
 import time
 from collections.abc import Callable, Iterator, Sequence
@@ -18,25 +20,45 @@ from typing import Any
 
 import gradio as gr
 
-from app_setup.app import AppModel, InstallError, SetupItem
+from app_setup.app import AppModel, SetupItem
 from app_setup.ui.form import render_section, section_title
 from app_setup.ui.report import (
+    HEADER,
     Progress,
     config_report,
     env_file_rows,
-    item_line,
+    item_status,
     secrets_report,
     setup_summary,
 )
 
-__all__ = ["SetupPanel", "secrets_panel", "setup_panel"]
+__all__ = ["SetupPanel", "secrets_panel", "setup_panel", "unsaved_notice"]
 
 Config = dict[str, Any]
+
+# The panels' `gr.render`s run one at a time, all of them together (one concurrency group of
+# one): gradio numbers a page's listeners from a counter that two renders running at once
+# (the form and the table on page load, a Check and the timer's re-check) can read alike,
+# and two runs of one render unregister each other's listeners; either way a button drawn
+# then calls a function the server no longer knows.
+_RENDERS: dict[str, Any] = {
+    "concurrency_limit": 1,
+    "concurrency_id": "app-setup-render",
+}
 
 # A fresh value for a panel's revision on each page load: its form is drawn when it changes.
 _loads = itertools.count(1)
 
 LOCKED = "🔒 A session is running: stop it to change the config."
+
+# Which config the buttons use: the sections' try the draft, a session the saved one.
+DRAFT = (
+    "Check, Install, Prepare and Test try the config as it is in the form. "
+    "Save it for a session to use it."
+)
+UNSAVED_TOP = "✏️ Unsaved changes — Save is at the bottom."
+UNSAVED_BOTTOM = "✏️ Unsaved changes."
+UNSAVED_SESSION = "The Setup tab has unsaved changes: Start uses the saved config."
 
 # What a field's mark means: a field with a default shows it in its hover text instead.
 REQUIRED = (
@@ -44,6 +66,29 @@ REQUIRED = (
     "A value in grey is the default: not set, so the library's own applies, and not "
     "saved. Only what you set is saved."
 )
+
+
+def unsaved_notice(model: AppModel, draft: Config) -> str:
+    """For the app's own session view, given a Setup panel's ``draft``: a line saying the
+    draft has unsaved changes and Start uses the saved config, or "" (nothing to say, or
+    the panel not loaded yet: its draft still empty)."""
+    return UNSAVED_SESSION if draft and model.unsaved(draft) else ""
+
+
+def saved_notice(model: AppModel, config: Config) -> str:
+    """What Save says once the config is written: saved, or saved with problems a session
+    would refuse it for. A half-finished config is still saved, so nothing is lost; the
+    line says it cannot run yet. Only the config's own problems: what the machine misses
+    needs the libraries' imports, and each section's table shows it."""
+    problems = model.check_config(config)
+    if not problems:
+        return "✅ Saved."
+    count = len(problems)
+    noun = "problem" if count == 1 else "problems"
+    return (
+        f"⚠️ Saved, with {count} {noun} in the config: a session cannot start with it "
+        "until they are fixed. Each section's **Check** lists them."
+    )
 
 
 @dataclass(frozen=True)
@@ -57,34 +102,19 @@ class SetupPanel:
     saved: gr.State
 
 
-def _streamed(work: Callable[[Callable[[str], None]], None]) -> Iterator[str]:
-    """Run *work* on a thread, yielding the log so far each time it emits a line."""
-    lines: queue.Queue[str | None] = queue.Queue()
-    text: list[str] = []
-
-    def run() -> None:
-        try:
-            work(lines.put)
-        except Exception as exc:  # noqa: BLE001 - shown in the log
-            lines.put(f"Failed: {exc}")
-        finally:
-            lines.put(None)
-
-    threading.Thread(target=run, name="app-setup-action", daemon=True).start()
-    while (line := lines.get()) is not None:
-        text.append(line)
-        yield "\n".join(text)
-    yield "\n".join(text)
-
-
 @dataclass
 class _Run:
-    """One item's preparation: its latest progress, then how it ended."""
+    """One action on an item's line (a preparation, an install): its latest progress, then
+    how it ended. An install may be shared by several lines (Install all: one uv run)."""
 
     started: float
+    install: bool = False
+    waiting: bool = False  # an install queued behind another
     fraction: float | None = None
     message: str = ""
+    lines: list[str] = field(default_factory=list)  # uv's output, for Install all
     ok: bool | None = None  # None while it runs
+    done: threading.Event = field(default_factory=threading.Event)
 
     def progress(self) -> Progress:
         return Progress(
@@ -93,26 +123,39 @@ class _Run:
             message=self.message,
             elapsed_s=time.monotonic() - self.started,
             ok=self.ok,
+            install=self.install,
+            waiting=self.waiting and self.ok is None,
         )
 
 
 @dataclass
-class _Preparations:
-    """The panel's preparations, shared by every browser tab (they act on the machine):
-    each item's run, and the sections busy with Check, Install or Test."""
+class _Actions:
+    """The panel's actions on the machine, shared by every browser tab: each line's
+    preparation (in parallel) and install (one at a time: uv works on one environment),
+    and the sections busy with Check, Install all or Test."""
 
     model: AppModel
     runs: dict[tuple[str, str], _Run] = field(default_factory=dict)
     busy: set[str] = field(default_factory=set)
     lock: threading.Lock = field(default_factory=threading.Lock)
+    # Held by the install running: the others wait their turn.
+    installing: threading.Lock = field(default_factory=threading.Lock)
+
+    def _claim(self, items: Sequence[SetupItem], run: _Run) -> bool:
+        """Give *items* to *run*; False when one is already being acted on."""
+        keys = [(item.section, item.id) for item in items]
+        with self.lock:
+            if any(k in self.runs and self.runs[k].ok is None for k in keys):
+                return False
+            for key in keys:
+                self.runs[key] = run
+        return True
 
     def start(self, config: Config, item: SetupItem) -> bool:
         """Prepare *item* on its own thread; False when it is already being prepared."""
-        key = (item.section, item.id)
-        with self.lock:
-            if key in self.runs and self.runs[key].ok is None:
-                return False
-            run = self.runs[key] = _Run(started=time.monotonic())
+        run = _Run(started=time.monotonic())
+        if not self._claim([item], run):
+            return False
 
         def progress(event: dict[str, Any]) -> None:
             fraction = event.get("fraction")
@@ -126,14 +169,53 @@ class _Preparations:
             outcome = self.model.prepare_item(config, item, progress)
             with self.lock:
                 run.ok, run.message = outcome.ok, outcome.message
+            run.done.set()
 
         threading.Thread(target=work, name=f"prepare-{item.id}", daemon=True).start()
         return True
+
+    def install(self, items: Sequence[SetupItem], extras: Sequence[str]) -> _Run | None:
+        """Install the host's *extras* for *items* (one line's, or a section's Install all)
+        in one uv run, on its own thread, after the install running if any; None when one
+        of the items is already being acted on."""
+        run = _Run(started=time.monotonic(), install=True, waiting=True)
+        if not self._claim(items, run):
+            return None
+
+        def emit(line: str) -> None:
+            with self.lock:
+                run.lines.append(line)
+                if line.strip():
+                    run.message = line.strip()
+
+        def work() -> None:
+            with self.installing:
+                with self.lock:
+                    run.waiting, run.started = False, time.monotonic()
+                try:
+                    code = self.model.install(extras, emit)
+                    ok, message = code == 0, f"uv exited with code {code}."
+                except Exception as exc:  # noqa: BLE001 - shown on the line
+                    ok, message = False, str(exc)
+            with self.lock:
+                run.ok = ok
+                if not ok:
+                    run.message = message
+                    run.lines.append(message)
+            run.done.set()
+
+        threading.Thread(target=work, name="install", daemon=True).start()
+        return run
 
     def progress(self, item: SetupItem) -> Progress | None:
         with self.lock:
             run = self.runs.get((item.section, item.id))
             return run.progress() if run is not None else None
+
+    def any_running(self) -> bool:
+        """Whether a line of any section is being acted on: the rows' timer runs then."""
+        with self.lock:
+            return any(run.ok is None for run in self.runs.values())
 
     def running(self, section: str) -> bool:
         with self.lock:
@@ -149,16 +231,316 @@ class _Preparations:
                     del self.runs[key]
 
 
-def _row(preparations: _Preparations, item: SetupItem) -> tuple[str, dict[str, Any]]:
-    """An item row's text and its Prepare button's state."""
-    progress = preparations.progress(item)
+def _action(item: SetupItem) -> str | None:
+    """What an item's line offers: "install", "key", "prepare", or nothing."""
+    if item.status == "ready":
+        return None
+    if item.installable:
+        return "install"
+    if item.variable is not None and item.status == "missing":
+        return "key"
+    if item.preparable:
+        return "prepare"
+    return None
+
+
+def _line(actions: _Actions, item: SetupItem) -> tuple[str, str, dict[str, Any]]:
+    """An item's line: its status, its explanation, and its button's state (Install or
+    Prepare)."""
+    progress = actions.progress(item)
     running = progress is not None and progress.running
-    prepared = progress is not None and progress.ok is True
-    wanted = item.preparable and item.status != "ready" and not prepared
-    return item_line(item, progress), {
-        "visible": wanted,
-        "interactive": not running and item.section not in preparations.busy,
-    }
+    done = progress is not None and progress.ok is True
+    status, explanation = item_status(item, progress)
+    return (
+        status,
+        explanation,
+        {
+            "visible": _action(item) in ("install", "prepare") and not done,
+            "interactive": not running and item.section not in actions.busy,
+        },
+    )
+
+
+# The table's layout: the three text cells (Item, Status, Explanation) are one HTML block
+# taking the row's width, the explanation the most of it; the action has a fixed width on
+# the right (a button keeps its own width there, a key field takes what Save leaves). A
+# gradio button stretches to its column's width, so the action column must not grow.
+_ACTION_WIDTH = 260
+_CELLS_STYLE = (
+    "display:grid;width:100%;"
+    "grid-template-columns:minmax(9em,2fr) minmax(10em,2fr) 5fr;"
+    "gap:12px;align-items:center"
+)
+
+# The most lines a section's table shows: its rows are drawn once, shown or hidden, so no
+# listener is ever dropped while a browser may still call it. Items past it are listed
+# under the table, without their actions. Kept small, with few components per row: each
+# event the page receives costs the browser a pass over every component, hidden ones
+# included, and a page with a few sections of many rows could not keep up.
+_ROWS = 10
+
+
+def _inline(text: str) -> str:
+    """*text*, Markdown with only `**bold**` and `` `code` `` (the report's wording), as
+    HTML: escaped first, so a library's words never become markup."""
+    escaped = html.escape(text)
+    escaped = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
+    return re.sub(r"`(.+?)`", r"<code>\1</code>", escaped)
+
+
+def _cells(title: str, status: str, explanation: str) -> str:
+    """A line's three text cells, laid out as the header's: one HTML block, so a row
+    costs the page one component for its text, not three."""
+    return (
+        f'<div style="{_CELLS_STYLE}"><div><strong>{html.escape(title)}</strong></div>'
+        f"<div>{_inline(status)}</div><div>{_inline(explanation)}</div></div>"
+    )
+
+
+@dataclass(frozen=True)
+class _Row:
+    """One line of a section's table, drawn once: what it shows depends on the item at
+    its place in the section's last check."""
+
+    row: gr.Row
+    cells: gr.HTML  # the item, its status, its explanation
+    button: gr.Button  # Install or Prepare
+    key: gr.Textbox  # a missing key's value
+    save: gr.Button  # saves the key
+
+
+@dataclass(frozen=True)
+class _Table:
+    """A section's table: a header, then its rows, then what did not fit."""
+
+    header: gr.Row
+    rows: tuple[_Row, ...]
+    overflow: gr.Markdown
+
+    @property
+    def components(self) -> list[Any]:
+        """What `_table_lines` updates, in its order."""
+        out: list[Any] = [self.header]
+        for row in self.rows:
+            out += [row.row, row.cells, row.button, row.key, row.save]
+        return [*out, self.overflow]
+
+
+def _draw_rows() -> _Table:
+    """The table's components, all hidden until a check fills them."""
+    item, status, explanation, action = (h.strip("*") for h in HEADER)
+    with gr.Row(equal_height=True, visible=False) as header:
+        gr.HTML(
+            f'<div style="{_CELLS_STYLE}"><strong>{item}</strong>'
+            f"<strong>{status}</strong><strong>{explanation}</strong></div>",
+            scale=1,
+            padding=False,
+        )
+        with gr.Column(scale=0, min_width=_ACTION_WIDTH):
+            gr.Markdown(f"**{action}**")
+    rows = []
+    for _ in range(_ROWS):
+        with gr.Row(equal_height=True, visible=False) as row:
+            cells = gr.HTML(scale=1, padding=False)
+            with (
+                gr.Column(scale=0, min_width=_ACTION_WIDTH),
+                gr.Row(equal_height=True),
+            ):
+                button = gr.Button("Prepare", size="sm", scale=0, visible=False)
+                key = gr.Textbox(
+                    type="password",
+                    show_label=False,
+                    interactive=True,
+                    scale=1,
+                    min_width=120,
+                    visible=False,
+                )
+                save = gr.Button("Save", size="sm", scale=0, visible=False)
+        rows.append(_Row(row, cells, button, key, save))
+    return _Table(header, tuple(rows), gr.Markdown(visible=False))
+
+
+def _row_updates(
+    actions: _Actions, item: SetupItem | None, same_item: bool
+) -> list[Any]:
+    """One row's updates for *item* (None: the row hidden). *same_item*: the row showed
+    this item already, so a key being typed on it is kept."""
+    if item is None:
+        return [gr.update(visible=False), *([gr.skip()] * 4)]
+    status, explanation, button_state = _line(actions, item)
+    action = _action(item)
+    key = action == "key"
+    variable = item.variable or ""
+    return [
+        gr.update(visible=True),
+        _cells(item.title, status, explanation),
+        gr.update(
+            value="Install" if action == "install" else "Prepare", **button_state
+        ),
+        gr.update(
+            visible=key,
+            placeholder=variable,
+            label=f"Value of {variable}",  # read by screen readers, not shown
+            **({} if same_item else {"value": ""}),
+        ),
+        gr.update(visible=key),
+    ]
+
+
+def _table_lines(
+    actions: _Actions,
+    items: Sequence[SetupItem],
+    before: Sequence[SetupItem] = (),
+) -> list[Any]:
+    """Every component of a section's table for *items*, a check's result; *before*, the
+    items it showed until now (a row keeping its item keeps a key being typed)."""
+    out: list[Any] = [gr.update(visible=bool(items))]
+    for index in range(_ROWS):
+        item = items[index] if index < len(items) else None
+        same = (
+            item is not None
+            and index < len(before)
+            and (before[index].section, before[index].id) == (item.section, item.id)
+        )
+        out += _row_updates(actions, item, same)
+    rest = items[_ROWS:]
+    listed = "\n".join(
+        f"- **{item.title}** — {' '.join(item_status(item, actions.progress(item)))}"
+        for item in rest
+    )
+    return [*out, gr.update(value=listed, visible=bool(rest))]
+
+
+def _wire_table(
+    model: AppModel,
+    actions: _Actions,
+    table: _Table,
+    draft: gr.State,
+    checked: gr.State,
+    checks: tuple[gr.Markdown, gr.Markdown, gr.State],
+    reports: Callable[[Config], tuple[Any, ...]],
+    timer: gr.Timer,
+) -> None:
+    """A section's table, wired once: filled from each check, each row's Install or
+    Prepare and key field acting on the item at its place; an action started turns the
+    rows' *timer* on (`_follow_rows`). *checks*, filled by *reports*, are what a
+    successful install or a key saved updates."""
+    # The items the rows show, in this browser tab: a row keeping its item keeps a key
+    # being typed on it.
+    shown = gr.State(())
+
+    def on_checked(
+        items: tuple[SetupItem, ...], before: tuple[SetupItem, ...]
+    ) -> list[Any]:
+        return [*_table_lines(actions, items, before), items]
+
+    checked.change(
+        on_checked,
+        inputs=[checked, shown],
+        outputs=[*table.components, shown],
+        show_progress="hidden",
+    )
+
+    def item_at(items: tuple[SetupItem, ...], index: int) -> SetupItem | None:
+        return items[index] if index < len(items) else None
+
+    for index, row in enumerate(table.rows):
+
+        def on_button(
+            items: tuple[SetupItem, ...], config: Config, index: int = index
+        ) -> tuple[Any, ...]:
+            item = item_at(items, index)
+            action = _action(item) if item is not None else None
+            if item is None or action not in ("install", "prepare"):
+                return (gr.skip(),) * 6
+            if action == "prepare":
+                actions.start(config, item)
+                status, explanation, state = _line(actions, item)
+                return (
+                    _cells(item.title, status, explanation),
+                    gr.update(**state),
+                    *((gr.skip(),) * 3),
+                    gr.Timer(active=True),
+                )
+            run = actions.install([item], item.host_extras[:1])
+            if run is None:
+                return (gr.skip(),) * 6
+            run.done.wait()
+            # Installed: the section checked again. Failed: the line keeps its error.
+            return (
+                *((gr.skip(),) * 2),
+                *(reports(config) if run.ok else (gr.skip(),) * 3),
+                gr.skip(),
+            )
+
+        # Install waits for its run: the rows' timer is turned on by the panel's own
+        # one-second tick, which sees an action running.
+        row.button.click(
+            on_button,
+            inputs=[checked, draft],
+            outputs=[row.cells, row.button, *checks, timer],
+            show_progress="hidden",
+        )
+
+        def on_save_key(
+            text: str,
+            items: tuple[SetupItem, ...],
+            config: Config,
+            index: int = index,
+        ) -> tuple[Any, ...]:
+            item = item_at(items, index)
+            if item is None or item.variable is None:
+                return (gr.skip(),) * 4
+            try:
+                model.secrets.set(item.variable, text or "")
+            except ValueError as exc:
+                gr.Warning(str(exc))
+                return (gr.skip(),) * 4
+            return "", *reports(config)
+
+        for event in (row.save.click, row.key.submit):
+            event(
+                on_save_key,
+                inputs=[row.key, checked, draft],
+                outputs=[row.key, *checks],
+                show_progress="hidden",
+            )
+
+
+def _follow_rows(
+    actions: _Actions, sections: Sequence[_Section], timer: gr.Timer
+) -> None:
+    """The rows' *timer*, one for the whole panel, on only while a line is being acted on:
+    each tick sends the lines with an action (a preparation's progress, an install's latest
+    words, how it ended) and nothing else, then turns itself off once none runs. An idle
+    panel sends no event for its rows: each event costs the browser a pass over the page."""
+
+    def on_rows_tick(*checked: tuple[SetupItem, ...]) -> list[Any]:
+        updates: list[Any] = []
+        for items in checked:
+            for index in range(_ROWS):
+                item = items[index] if index < len(items) else None
+                if item is None or actions.progress(item) is None:
+                    updates += [gr.skip()] * 2
+                    continue
+                status, explanation, state = _line(actions, item)
+                updates += [_cells(item.title, status, explanation), gr.update(**state)]
+        return [*updates, gr.Timer(active=actions.any_running())]
+
+    timer.tick(
+        on_rows_tick,
+        inputs=[section.checked for section in sections],
+        outputs=[
+            *(
+                component
+                for section in sections
+                for row in section.table.rows
+                for component in (row.cells, row.button)
+            ),
+            timer,
+        ],
+        show_progress="hidden",
+    )
 
 
 @dataclass(frozen=True)
@@ -169,104 +551,85 @@ class _Section:
     block: gr.Column
     config_md: gr.Markdown
     summary_md: gr.Markdown
-    checked: gr.State  # (a counter, the section's items): its rows are drawn from it
+    # The section's items, from its last check: its table shows them (`checked.change`).
+    checked: gr.State
     output: gr.Textbox
     buttons: tuple[gr.Button, ...]
-    # The section's problems, its summary and its items for the rows, for a config.
-    reports: Callable[[Config], tuple[str, str, tuple[int, list[SetupItem]]]]
+    table: _Table
+    # The section's problems, its summary and its items, for a config.
+    reports: Callable[[Config], tuple[Any, ...]]
+
+    @property
+    def checks(self) -> tuple[gr.Markdown, gr.Markdown, gr.State]:
+        """What a check of the section updates: its problems, its summary, its table."""
+        return self.config_md, self.summary_md, self.checked
 
 
 def _section_block(
     model: AppModel,
     name: str,
     draft: gr.State,
-    revision: gr.State,
-    preparations: _Preparations,
+    revision: gr.Number,
+    actions: _Actions,
     timer: gr.Timer,
 ) -> _Section:
-    """Section *name*: its title, its form, and its own Check, Install, Prepare all and
-    Test, acting on it alone; then one row per item, each with its own Prepare."""
-    checks = itertools.count(1)
+    """Section *name*: its title, its form, and its own Check, Install all, Prepare all
+    and Test, acting on it alone; then a table of what it needs, a line per item with its
+    own action."""
 
-    def reports(config: Config) -> tuple[str, str, tuple[int, list[SetupItem]]]:
-        """The section's problems, its summary, and its items for the rows."""
+    def reports(config: Config) -> tuple[Any, ...]:
+        """The section's problems, its summary, and its items for the table."""
         items = model.check_setup(config, [name])
-        preparations.forget_finished(name)
+        actions.forget_finished(name)
         return (
             config_report(model.check_config(config, [name])),
             setup_summary(items),
-            (next(checks), items),
+            tuple(items),
         )
+
+    # Bumped by each field of the section the user is done with: checked again then.
+    edited = gr.State(0)
 
     # A panel-styled column, not a `gr.Group`: inside a group, gradio draws buttons flat.
     with gr.Column(variant="panel") as block:
         gr.Markdown(f"### {section_title(model, name)}")
 
-        @gr.render(inputs=[draft], triggers=[revision.change])
-        def form(config: Config) -> None:
-            render_section(model, name, config, draft, revision)
+        @gr.render(inputs=[draft, revision], triggers=[revision.change], **_RENDERS)
+        def form(config: Config, loaded: int) -> None:
+            # gradio also runs a render as the page loads, before the draft is read: a form
+            # drawn then is replaced at once, and a click on it would reach listeners the
+            # server has already dropped. Drawn from the loaded draft only.
+            if loaded:
+                render_section(model, name, config, draft, revision, edited)
 
         with gr.Row():
             check = gr.Button("Check", scale=0)
-            install = gr.Button("Install missing extras", scale=0)
+            install_all = gr.Button("Install all", scale=0)
             prepare_all = gr.Button("Prepare all", scale=0)
             probe = gr.Button("Test", scale=0)
         config_md = gr.Markdown()
         summary_md = gr.Markdown()
-        checked = gr.State((0, []))
-
-        @gr.render(inputs=[checked], triggers=[checked.change])
-        def rows(state: tuple[int, list[SetupItem]]) -> None:
-            _, items = state
-            lines: list[gr.Markdown] = []
-            buttons: list[gr.Button] = []
-            for item in items:
-                text, button_state = _row(preparations, item)
-                with gr.Row(equal_height=True):
-                    line = gr.Markdown(text)
-                    button = gr.Button("Prepare", size="sm", scale=0, **button_state)
-
-                def on_prepare(
-                    config: Config, item: SetupItem = item
-                ) -> tuple[Any, Any]:
-                    preparations.start(config, item)
-                    text, button_state = _row(preparations, item)
-                    return text, gr.update(**button_state)
-
-                button.click(
-                    on_prepare,
-                    inputs=[draft],
-                    outputs=[line, button],
-                    show_progress="hidden",
-                )
-                lines.append(line)
-                buttons.append(button)
-            if not items:
-                return
-
-            def on_rows_tick(items: Sequence[SetupItem] = items) -> list[Any]:
-                states = [_row(preparations, item) for item in items]
-                return [text for text, _ in states] + [
-                    gr.update(**button_state) for _, button_state in states
-                ]
-
-            timer.tick(on_rows_tick, outputs=[*lines, *buttons], show_progress="hidden")
+        checked = gr.State(())
+        # The table: its rows drawn once, filled from each check (`checked`).
+        table = _draw_rows()
 
         output = gr.Textbox(
             label="Output", lines=6, max_lines=20, interactive=False, visible=False
         )
 
-    buttons = (check, install, prepare_all, probe)
+    buttons = (check, install_all, prepare_all, probe)
+    checks = (config_md, summary_md, checked)
+    _wire_table(model, actions, table, draft, checked, checks, reports, timer)
 
     def shown(text: str) -> Any:
         return gr.update(value=text, visible=True)
 
     def busy(on: bool) -> list[Any]:
-        """Mark the section busy (its buttons and rows disabled) or free again."""
+        """Mark the section busy (its buttons and lines disabled) or free again."""
         if on:
-            preparations.busy.add(name)
+            actions.busy.add(name)
         else:
-            preparations.busy.discard(name)
+            actions.busy.discard(name)
         return [gr.update(interactive=not on) for _ in buttons]
 
     def on_busy() -> list[Any]:
@@ -282,35 +645,61 @@ def _section_block(
         on_check, inputs=[draft], outputs=[config_md, summary_md, checked]
     ).then(on_free, outputs=list(buttons))
 
-    def on_install(config: Config) -> Iterator[tuple[Any, ...]]:
-        extras = model.missing_extras(config, [name])
+    def on_install_all(config: Config) -> Iterator[tuple[Any, ...]]:
+        items = [i for i in model.check_setup(config, [name]) if i.installable]
+        extras = list(dict.fromkeys(i.host_extras[0] for i in items))
         if not extras:
             yield shown("No missing extra the host can install."), *reports(config)
             return
-
-        def work(emit: Callable[[str], None]) -> None:
-            emit(f"Installing: {', '.join(extras)}")
-            try:
-                code = model.install(extras, emit)
-            except InstallError as exc:
-                emit(str(exc))
-                return
-            emit("Done." if code == 0 else f"uv exited with code {code}.")
-
-        text = ""
-        for text in _streamed(work):
+        run = actions.install(items, extras)
+        if run is None:
+            yield (
+                shown("One of these extras is being installed already."),
+                *((gr.skip(),) * 3),
+            )
+            return
+        heading = f"Installing: {', '.join(extras)}"
+        while not run.done.wait(0.2):
+            with actions.lock:
+                text = "\n".join(
+                    [
+                        heading,
+                        *(["Waiting for another install…"] if run.waiting else []),
+                    ]
+                    + run.lines
+                )
             yield shown(text), gr.skip(), gr.skip(), gr.skip()
-        yield shown(text), *reports(config)
+        with actions.lock:
+            text = "\n".join([heading, *run.lines, "Done." if run.ok else ""]).rstrip()
+        # Installed: the section checked again. Failed: the lines keep the error.
+        yield shown(text), *(reports(config) if run.ok else (gr.skip(),) * 3)
 
-    install.click(on_busy, outputs=list(buttons)).then(
-        on_install, inputs=[draft], outputs=[output, config_md, summary_md, checked]
+    install_all.click(on_busy, outputs=list(buttons)).then(
+        on_install_all,
+        inputs=[draft],
+        outputs=[output, config_md, summary_md, checked],
     ).then(on_free, outputs=list(buttons))
 
-    def on_prepare_all(config: Config) -> None:
+    def on_prepare_all(config: Config) -> Any:
         for item in model.to_prepare(config, [name]):
-            preparations.start(config, item)
+            actions.start(config, item)
+        return gr.Timer(active=True)
 
-    prepare_all.click(on_prepare_all, inputs=[draft], show_progress="hidden")
+    prepare_all.click(
+        on_prepare_all, inputs=[draft], outputs=[timer], show_progress="hidden"
+    )
+
+    def on_edited(config: Config) -> tuple[Any, ...]:
+        return reports(config)
+
+    # A field finished: the section checked again, as if Check were clicked (a key's
+    # variable renamed, a voice typed), without its output box (Check's own).
+    edited.change(
+        on_edited,
+        inputs=[draft],
+        outputs=[config_md, summary_md, checked],
+        show_progress="hidden",
+    )
 
     def on_probe(config: Config) -> Any:
         result = model.probe(config, name)
@@ -324,21 +713,29 @@ def _section_block(
     ).then(on_free, outputs=list(buttons))
 
     return _Section(
-        name, block, config_md, summary_md, checked, output, buttons, reports
+        name, block, config_md, summary_md, checked, output, buttons, table, reports
     )
 
 
 def setup_panel(model: AppModel) -> SetupPanel:
-    """Draw the Setup panel of *model*'s app here: Save, Revert and Reset for the whole
-    config, then one block per section the config uses: its form, its own checks (Check,
-    Install, Prepare all, Test) acting on it alone, and a row per item it needs, each with
-    its own Prepare and progress."""
+    """Draw the Setup panel of *model*'s app here: for an app with autostart, its launch
+    choice, saved at once; then the config: one block per section the config uses (its
+    form, its own checks — Check, Install all, Prepare all, Test — trying the draft, a
+    table of what it needs, a line per item with its own action), and at the bottom Save, Revert and Reset for the whole config, a line
+    saying when the draft differs from the saved config at the top and next to Save."""
     draft = gr.State({})
-    revision = gr.State(0)
+    # Bumped on each change of the form's structure: the forms are drawn again then. A hidden
+    # number, not a `gr.State`: in a tab other than the first, gradio fires a State's change
+    # twice as the page loads (once more as the tab mounts), so the form was drawn twice
+    # and a click on the first drawing reached listeners the second had dropped.
+    revision = gr.Number(0, precision=0, visible=False)
     saved = gr.State(0)
+    # The last `SecretStore.revision` this tab saw: when it changes (a key saved or
+    # removed, from any tab), the sections are checked again.
+    secrets_seen = gr.State(None)
 
     # The launch choice first, apart from the config it is not part of: Save, Revert and
-    # Reset below act on the config only.
+    # Reset act on the config only.
     autostart = (
         gr.Checkbox(
             label="Start the session when the app launches",
@@ -350,31 +747,42 @@ def setup_panel(model: AppModel) -> SetupPanel:
         else None
     )
     launch_notice = gr.Markdown() if autostart is not None else None
-    if autostart is not None:
-        gr.Markdown("### Configuration")
+    gr.Markdown("### Configuration")
+    gr.Markdown(DRAFT)
+    gr.Markdown(REQUIRED)
+    unsaved_top = gr.Markdown()
+
+    # The item rows' progress, on a timer of their own (sharing the lock line's stopped the
+    # lock line updating in the browser), off until a line is acted on (`_follow_rows`).
+    rows_timer = gr.Timer(0.5, active=False)
+    actions = _Actions(model)
+    sections = [
+        _section_block(model, section.name, draft, revision, actions, rows_timer)
+        for section in model.app.sections
+    ]
+    _follow_rows(actions, sections, rows_timer)
+
+    # The config is kept last, after the sections it is tried in.
+    unsaved_bottom = gr.Markdown()
     with gr.Row():
         save = gr.Button("Save", variant="primary", scale=0)
         revert = gr.Button("Revert to saved", scale=0)
         reset = gr.Button("Reset to defaults", scale=0)
     lock = gr.Markdown()
     notice = gr.Markdown()
-    gr.Markdown(REQUIRED)
-
-    # The item rows' progress, on a timer of their own: sharing the lock line's timer
-    # stopped the lock line updating in the browser.
-    rows_timer = gr.Timer(0.5)
-    preparations = _Preparations(model)
-    sections = [
-        _section_block(model, section.name, draft, revision, preparations, rows_timer)
-        for section in model.app.sections
-    ]
     timer = gr.Timer(1.0)
 
-    def on_load() -> tuple[Config, int]:
-        return model.saved_config(), next(_loads)
+    def unsaved_lines(config: Config, rev: int) -> tuple[str, str]:
+        """Both unsaved lines; none before the page load drew the draft."""
+        if rev and model.unsaved(config):
+            return UNSAVED_TOP, UNSAVED_BOTTOM
+        return "", ""
+
+    def on_load() -> tuple[Config, int, int]:
+        return model.saved_config(), next(_loads), model.secrets.revision
 
     # No trigger and no input: on page load only.
-    gr.on(None, on_load, outputs=[draft, revision])
+    gr.on(None, on_load, outputs=[draft, revision, secrets_seen])
 
     if autostart is not None and launch_notice is not None:
 
@@ -399,7 +807,7 @@ def setup_panel(model: AppModel) -> SetupPanel:
         updates: list[Any] = []
         for section in sections:
             visible = section.name in used
-            reports = section.reports(config) if visible else ("", "", (0, []))
+            reports = section.reports(config) if visible else ("", "", (), ())
             updates += [
                 gr.update(visible=visible),
                 *reports,
@@ -417,58 +825,126 @@ def setup_panel(model: AppModel) -> SetupPanel:
         outputs=[
             component
             for section in sections
-            for component in (
-                section.block,
-                section.config_md,
-                section.summary_md,
-                section.checked,
-                section.output,
-            )
+            for component in (section.block, *section.checks, section.output)
         ],
         show_progress="hidden",
     )
 
-    def on_save(config: Config, count: int) -> tuple[Any, ...]:
+    def on_draft(config: Config, rev: int) -> tuple[str, str]:
+        return unsaved_lines(config, rev)
+
+    # Each change of the draft, a value typed included: compared with the saved file.
+    draft.change(
+        on_draft,
+        inputs=[draft, revision],
+        outputs=[unsaved_top, unsaved_bottom],
+        show_progress="hidden",
+    )
+
+    def on_save(config: Config, count: int, rev: int) -> tuple[Any, ...]:
         try:
             model.save(config)
         except RuntimeError as exc:
-            return f"⚠️ {exc}", gr.skip()
-        return "✅ Saved.", count + 1
+            return f"⚠️ {exc}", gr.skip(), *unsaved_lines(config, rev)
+        return saved_notice(model, config), count + 1, *unsaved_lines(config, rev)
 
-    save.click(on_save, inputs=[draft, saved], outputs=[notice, saved])
+    save.click(
+        on_save,
+        inputs=[draft, saved, revision],
+        outputs=[notice, saved, unsaved_top, unsaved_bottom],
+    )
 
-    def on_revert(rev: int) -> tuple[Config, int, str]:
-        return model.saved_config(), rev + 1, "Reverted to the saved config."
+    def on_revert(rev: int) -> tuple[Any, ...]:
+        config = model.saved_config()
+        return (
+            config,
+            rev + 1,
+            "Reverted to the saved config.",
+            *unsaved_lines(config, rev + 1),
+        )
 
-    revert.click(on_revert, inputs=[revision], outputs=[draft, revision, notice])
+    revert.click(
+        on_revert,
+        inputs=[revision],
+        outputs=[draft, revision, notice, unsaved_top, unsaved_bottom],
+    )
 
-    def on_reset(rev: int, count: int) -> tuple[Any, ...]:
+    def on_reset(config: Config, rev: int, count: int) -> tuple[Any, ...]:
         try:
             config = model.reset()
         except RuntimeError as exc:
-            return gr.skip(), gr.skip(), gr.skip(), f"⚠️ {exc}"
+            return (
+                gr.skip(),
+                gr.skip(),
+                gr.skip(),
+                f"⚠️ {exc}",
+                *unsaved_lines(config, rev),
+            )
         return (
             config,
             rev + 1,
             count + 1,
             "Reset to the app's default config, and saved.",
+            *unsaved_lines(config, rev + 1),
         )
 
     reset.click(
         on_reset,
-        inputs=[revision, saved],
-        outputs=[draft, revision, saved, notice],
+        inputs=[draft, revision, saved],
+        outputs=[draft, revision, saved, notice, unsaved_top, unsaved_bottom],
     )
 
-    def on_tick() -> tuple[str, Any, Any]:
-        locked = model.locked()
-        return (
-            LOCKED if locked else "",
-            gr.update(interactive=not locked),
-            gr.update(interactive=not locked),
-        )
+    # What the tick last showed in this browser tab (the lock, the unsaved lines): sent
+    # again only when it changed, since each update costs the browser a pass over the page.
+    ticked = gr.State(None)
 
-    timer.tick(on_tick, outputs=[lock, save, reset], show_progress="hidden")
+    def on_tick(
+        config: Config, rev: int, seen: int | None, last: tuple[Any, ...] | None
+    ) -> list[Any]:
+        """Every second: the lock (Save and Reset with it), the unsaved lines (another tab
+        may have saved), each sent only when it changed; the rows' timer turned on when a
+        line is being acted on (from another tab, or an install); and, when a key was saved
+        or removed since this tab last looked, the checks of the sections the config
+        uses."""
+        locked = model.locked()
+        now = (locked, *unsaved_lines(config, rev))
+        if now == last:
+            updates: list[Any] = [gr.skip()] * 5
+        else:
+            updates = [
+                LOCKED if locked else "",
+                gr.update(interactive=not locked),
+                gr.update(interactive=not locked),
+                *now[1:],
+            ]
+        current = model.secrets.revision
+        changed = rev and seen is not None and seen != current
+        used = set(model.used(config)) if changed else set()
+        updates.append(current if changed or seen is None else gr.skip())
+        for section in sections:
+            if section.name in used:
+                updates += section.reports(config)
+            else:
+                updates += [gr.skip()] * len(section.checks)
+        rows = gr.Timer(active=True) if actions.any_running() else gr.skip()
+        return [*updates, rows, now if now != last else gr.skip()]
+
+    timer.tick(
+        on_tick,
+        inputs=[draft, revision, secrets_seen, ticked],
+        outputs=[
+            lock,
+            save,
+            reset,
+            unsaved_top,
+            unsaved_bottom,
+            secrets_seen,
+            *(component for section in sections for component in section.checks),
+            rows_timer,
+            ticked,
+        ],
+        show_progress="hidden",
+    )
 
     return SetupPanel(draft=draft, saved=saved)
 
@@ -496,7 +972,8 @@ def secrets_panel(model: AppModel, config: gr.State | None = None) -> None:
 
     gr.Markdown(f"### In the folder's .env\n\n`{model.folder.env_path}`")
     # Changes each time the file may have changed: the list below is drawn again.
-    env_revision = gr.State(0)
+    # A hidden number, not a `gr.State`, for the reason the Setup panel's `revision` is.
+    env_revision = gr.Number(0, precision=0, visible=False)
     refresh = gr.Button("Refresh", scale=0)
 
     inputs = [config] if config is not None else []
@@ -520,6 +997,7 @@ def secrets_panel(model: AppModel, config: gr.State | None = None) -> None:
             env_revision.change,
             *([config.change] if config is not None else []),
         ],
+        **_RENDERS,
     )
     def env_file(revision: int, *values: Config) -> None:
         rows = file_rows(values)
@@ -542,15 +1020,46 @@ def secrets_panel(model: AppModel, config: gr.State | None = None) -> None:
                 outputs=[secret_notice, secrets_md, env_revision],
             )
 
-    def on_load(*values: Config) -> tuple[str, int]:
-        return report(*values), next(_loads)
+    # The `SecretStore.revision` the key table shows, in this browser tab: noted with the
+    # table on page load. A key saved or removed anywhere else (on a line of the Setup
+    # panel, in another tab) changes it: the timer below sees it and draws both parts
+    # again, so no reload is needed. Noted here, not by the timer's first tick: a timer in
+    # a tab not shown yet only starts when the tab is first opened, maybe after the save.
+    seen = gr.State(None)
 
-    # On page load, and on each change of the config it follows.
+    def on_load(*values: Config) -> tuple[str, int, int]:
+        return report(*values), next(_loads), model.secrets.revision
+
+    # On page load.
     gr.on(
         None,
         on_load,
         inputs=inputs,
-        outputs=[secrets_md, env_revision],
+        outputs=[secrets_md, env_revision, seen],
+        show_progress="hidden",
+    )
+
+    # The key table follows the config it reads: a module chosen in the Setup panel's
+    # draft shows the key it needs at once.
+    if config is not None:
+        config.change(
+            report, inputs=inputs, outputs=[secrets_md], show_progress="hidden"
+        )
+
+    timer = gr.Timer(1)
+
+    def on_secrets_tick(last: int | None, rev: int, *values: Config) -> tuple[Any, ...]:
+        current_revision = model.secrets.revision
+        if last is None:
+            return gr.skip(), gr.skip(), current_revision
+        if last == current_revision:
+            return gr.skip(), gr.skip(), gr.skip()
+        return report(*values), rev + 1, current_revision
+
+    timer.tick(
+        on_secrets_tick,
+        inputs=[seen, env_revision, *inputs],
+        outputs=[secrets_md, env_revision, seen],
         show_progress="hidden",
     )
 
