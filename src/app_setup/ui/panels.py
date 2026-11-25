@@ -261,11 +261,15 @@ def _line(actions: _Actions, item: SetupItem) -> tuple[str, str, dict[str, Any]]
     )
 
 
-# The table's width shares: the three text cells (Item, Status, Explanation) of one HTML
-# block, then the action.
-_CELLS_SCALE, _ACTION_SCALE = 8, 2
+# The table's layout: the three text cells (Item, Status, Explanation) are one HTML block
+# taking the row's width, the explanation the most of it; the action has a fixed width on
+# the right (a button keeps its own width there, a key field takes what Save leaves). A
+# gradio button stretches to its column's width, so the action column must not grow.
+_ACTION_WIDTH = 260
 _CELLS_STYLE = (
-    "display:grid;grid-template-columns:2fr 2fr 4fr;gap:12px;align-items:center"
+    "display:grid;width:100%;"
+    "grid-template-columns:minmax(9em,2fr) minmax(10em,2fr) 5fr;"
+    "gap:12px;align-items:center"
 )
 
 # The most lines a section's table shows: its rows are drawn once, shown or hidden, so no
@@ -329,23 +333,29 @@ def _draw_rows() -> _Table:
         gr.HTML(
             f'<div style="{_CELLS_STYLE}"><strong>{item}</strong>'
             f"<strong>{status}</strong><strong>{explanation}</strong></div>",
-            scale=_CELLS_SCALE,
+            scale=1,
             padding=False,
         )
-        gr.Markdown(f"**{action}**", scale=_ACTION_SCALE)
+        with gr.Column(scale=0, min_width=_ACTION_WIDTH):
+            gr.Markdown(f"**{action}**")
     rows = []
     for _ in range(_ROWS):
         with gr.Row(equal_height=True, visible=False) as row:
-            cells = gr.HTML(scale=_CELLS_SCALE, padding=False)
-            with gr.Column(scale=_ACTION_SCALE, min_width=80):
-                button = gr.Button("Prepare", size="sm", visible=False)
+            cells = gr.HTML(scale=1, padding=False)
+            with (
+                gr.Column(scale=0, min_width=_ACTION_WIDTH),
+                gr.Row(equal_height=True),
+            ):
+                button = gr.Button("Prepare", size="sm", scale=0, visible=False)
                 key = gr.Textbox(
                     type="password",
                     show_label=False,
                     interactive=True,
+                    scale=1,
+                    min_width=120,
                     visible=False,
                 )
-                save = gr.Button("Save", size="sm", visible=False)
+                save = gr.Button("Save", size="sm", scale=0, visible=False)
         rows.append(_Row(row, cells, button, key, save))
     return _Table(header, tuple(rows), gr.Markdown(visible=False))
 
