@@ -37,6 +37,7 @@ __all__ = [
     "Problem",
     "Section",
     "SetupItem",
+    "summary_line",
 ]
 
 ContractSource = SetupContract | Callable[[], SetupContract]
@@ -54,6 +55,10 @@ class Section:
     of its own extras: the section then shows that extra (*host_extra*) as missing until the
     import succeeds. *when*, given the whole config, says whether the section is used (a
     section for one embodiment only); an unused section is neither drawn nor checked.
+
+    *optional*: the user may leave the section out. Absent from the config, it is off: not
+    used, not checked, not counted by the blockers (specs/setup-overview.md). *default* is
+    the document **Add** writes into the config to turn it on (``{}`` when not given).
     """
 
     name: str
@@ -61,6 +66,8 @@ class Section:
     title: str | None = None
     when: Callable[[Mapping[str, Any]], bool] | None = None
     host_extra: str | None = None
+    optional: bool = False
+    default: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -86,6 +93,11 @@ class App:
             raise ValueError(
                 f"{self.name}: a bare app has exactly one section, "
                 f"not {len(self.sections)}"
+            )
+        if self.bare and self.sections[0].optional:
+            raise ValueError(
+                f"{self.name}: a bare app's only section is the whole config: it cannot "
+                "be optional"
             )
 
 
@@ -205,6 +217,25 @@ def _extra_item(requirement: str) -> dict[str, Any]:
     }
 
 
+def _count(n: int, what: str) -> str:
+    return f"{n} {what}{'' if n == 1 else 's'}"
+
+
+def summary_line(needing: Sequence[str], deferred: int) -> str:
+    """The whole config's line, in the items table's words: the titles of the sections
+    that need something (a problem in the config, a required item missing), else ready,
+    with the optional items missing a first start would get itself."""
+    if needing:
+        verb = "needs" if len(needing) == 1 else "need"
+        return f"❌ {_count(len(needing), 'section')} {verb} something: {', '.join(needing)}."
+    if deferred:
+        return (
+            f"✅ Ready to run — {_count(deferred, 'optional item')} missing: the first "
+            "start will get them, slower"
+        )
+    return "✅ Ready to run"
+
+
 def _named(variables: Sequence[str], *texts: str) -> str | None:
     """The first of *variables* one of *texts* names as a whole word: the variable a key
     item is about (the contract gives an item no kind)."""
@@ -275,18 +306,63 @@ class AppModel:
         loaded.load()
         return loaded.error
 
+    def section_title(self, name: str) -> str:
+        """A section's title: the app's, else its library's, else its key."""
+        section = self.section(name)
+        description = self.description(name)
+        return section.title or (description.title if description else name)
+
+    def _applies(self, section: Section, config: Mapping[str, Any]) -> bool:
+        return section.when is None or bool(section.when(config))
+
     def used(
         self, config: Mapping[str, Any], sections: Iterable[str] | None = None
     ) -> list[str]:
         """The sections this config uses, in declaration order; only those of
-        *sections* when given (the Setup panel acts on one section at a time)."""
+        *sections* when given (the Setup panel acts on one section at a time). An optional
+        section absent from the config is off: not used."""
         wanted = None if sections is None else set(sections)
         return [
             section.name
             for section in self.app.sections
-            if (section.when is None or section.when(config))
+            if self._applies(section, config)
+            and not (section.optional and section.name not in config)
             and (wanted is None or section.name in wanted)
         ]
+
+    def optional_off(self, config: Mapping[str, Any]) -> list[str]:
+        """The optional sections the config leaves out (and whose `when` applies): those
+        the user can add, in declaration order."""
+        return [
+            section.name
+            for section in self.app.sections
+            if section.optional
+            and section.name not in config
+            and self._applies(section, config)
+        ]
+
+    def _optional(self, name: str) -> Section:
+        section = self.section(name)
+        if not section.optional:
+            raise ValueError(f"The '{name}' section is not optional.")
+        return section
+
+    def add_section(
+        self,
+        config: Mapping[str, Any],
+        name: str,
+        document: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """*config* with the optional section *name* on: *document* (the one the user
+        removed earlier, kept by the panel), else the section's default, else ``{}``."""
+        section = self._optional(name)
+        chosen = document if document is not None else section.default
+        return {**config, name: copy.deepcopy(dict(chosen or {}))}
+
+    def remove_section(self, config: Mapping[str, Any], name: str) -> dict[str, Any]:
+        """*config* without the optional section *name*: off."""
+        self._optional(name)
+        return {key: value for key, value in config.items() if key != name}
 
     @property
     def _base_dir(self) -> str:
@@ -543,6 +619,23 @@ class AppModel:
             if item.blocking
         ]
         return reasons
+
+    def summary(
+        self, config: Mapping[str, Any], sections: Iterable[str] | None = None
+    ) -> str:
+        """The whole config's line, in the table's words: ready to run (and how many
+        optional items a first start would get itself), or which sections need something
+        (a problem in the config, a required item missing). Only *sections*, when given."""
+        names = self.used(config, sections)
+        problems = {p.section for p in self.check_config(config, names)}
+        items = self.check_setup(config, names)
+        blocked = {item.section for item in items if item.blocking}
+        needing = [
+            self.section_title(name)
+            for name in names
+            if name in problems or name in blocked
+        ]
+        return summary_line(needing, sum(1 for item in items if item.deferred))
 
     def to_prepare(
         self, config: Mapping[str, Any], sections: Iterable[str] | None = None

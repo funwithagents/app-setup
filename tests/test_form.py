@@ -16,6 +16,7 @@ from app_setup.form import (
     pointer,
     secret_variables,
     select_branch,
+    selected_modules,
     set_at,
     toggle_group,
 )
@@ -247,3 +248,44 @@ def test_the_secret_variables_are_the_named_ones_or_the_default() -> None:
 def test_a_pointer_escapes_its_parts() -> None:
     assert pointer(("tts", "a/b", "c~d")) == "/tts/a~1b/c~0d"
     assert pointer(()) == ""
+
+
+def _choice(name: str, *titles: str) -> dict[str, Any]:
+    """An object choosing one of *titles*' modules, by its `type`."""
+    return {
+        "type": "object",
+        "description": f"The {name}.",
+        "required": ["type"],
+        "oneOf": [
+            {"title": title, "properties": {"type": {"const": title.lower()}}}
+            for title in titles
+        ],
+    }
+
+
+def test_the_selected_modules_are_listed_in_the_form_s_order() -> None:
+    assert selected_modules(SCHEMA, {"module": {"type": "cloud-voice"}}) == [
+        "Cloud voice (hosted)"
+    ]
+    assert selected_modules(SCHEMA, {}) == []  # none chosen yet
+
+    two = parse_description(
+        {
+            "contract": 1,
+            "distribution": "speech-lib",
+            "title": "Speech",
+            "schema": {
+                "type": "object",
+                "required": ["engine"],
+                "properties": {
+                    "engine": _choice("engine", "Deepgram", "Whisper"),
+                    "vad": _choice("vad", "Silero", "WebRTC"),
+                },
+            },
+        }
+    ).schema
+    document = {"engine": {"type": "whisper"}, "vad": {"type": "silero"}}
+
+    assert selected_modules(two, document) == ["Whisper", "Silero"]
+    # An optional object switched off chooses nothing.
+    assert selected_modules(two, {"engine": {"type": "deepgram"}}) == ["Deepgram"]

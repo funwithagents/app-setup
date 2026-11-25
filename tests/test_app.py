@@ -598,3 +598,126 @@ def test_a_bare_app_has_exactly_one_section(lib: SpeechLib) -> None:
             {},
             bare=True,
         )
+
+
+def _with_optional(tmp_path: Path, **optional: Any) -> AppModel:
+    """The speech section, and an optional backup voice the user may leave out."""
+    return _model(
+        tmp_path,
+        SpeechLib(),
+        sections=(
+            Section("speech", SpeechLib()),
+            Section(
+                "backup", SpeechLib(), title="Backup voice", optional=True, **optional
+            ),
+        ),
+    )
+
+
+def test_an_optional_section_left_out_is_off(tmp_path: Path) -> None:
+    model = _with_optional(tmp_path)
+    # The backup's document would have a problem, and its lexicon is missing: neither
+    # counts while it is off.
+    off = dict(DEFAULTS)
+    on = {**DEFAULTS, "backup": {"module": {"type": "cloud-voice"}}}
+
+    assert model.used(off) == ["speech"]
+    assert model.optional_off(off) == ["backup"]
+    assert [i.section for i in model.check_setup(off)] == ["speech"] * 3
+    assert model.check_config(off) == []
+    assert not any(reason.startswith("backup") for reason in model.blockers(off))
+    assert model.used_config(off) == {"speech": DEFAULTS["speech"]}
+
+    # Present, whatever its document: on, checked and blocking.
+    assert model.used(on) == ["speech", "backup"] and model.optional_off(on) == []
+    assert model.used({**DEFAULTS, "backup": {}}) == ["speech", "backup"]
+    assert "/backup/module/voice_id: voice_id is required" in model.blockers(on)
+
+
+def test_an_optional_section_a_when_excludes_is_not_offered(tmp_path: Path) -> None:
+    model = _model(
+        tmp_path,
+        SpeechLib(),
+        sections=(
+            Section("speech", SpeechLib()),
+            Section(
+                "backup",
+                SpeechLib(),
+                optional=True,
+                when=lambda config: config.get("robot") is True,
+            ),
+        ),
+    )
+
+    assert model.optional_off(DEFAULTS) == []
+    assert model.optional_off({**DEFAULTS, "robot": True}) == ["backup"]
+
+
+def test_add_writes_the_default_and_remove_takes_the_section_out(
+    tmp_path: Path,
+) -> None:
+    default = {"module": {"type": "local-voice", "voice": "Bo"}}
+    model = _with_optional(tmp_path, default=default)
+
+    added = model.add_section(DEFAULTS, "backup")
+    assert added == {**DEFAULTS, "backup": default}
+    assert added["backup"] is not default  # a copy: an edit never reaches the app's
+    assert model.remove_section(added, "backup") == DEFAULTS
+    # Without a default: an empty document, which turns the section on all the same.
+    bare = _with_optional(tmp_path / "bare").add_section(DEFAULTS, "backup")
+    assert bare["backup"] == {} and "backup" in model.used(bare)
+
+    with pytest.raises(ValueError, match="not optional"):
+        model.remove_section(added, "speech")
+    with pytest.raises(ValueError, match="not optional"):
+        model.add_section(DEFAULTS, "speech")
+
+
+def test_a_section_removed_then_added_gets_its_document_back(tmp_path: Path) -> None:
+    model = _with_optional(tmp_path, default={"module": {"type": "local-voice"}})
+    edited = {
+        **DEFAULTS,
+        "backup": {"module": {"type": "cloud-voice", "voice_id": "v"}},
+    }
+
+    # What the panel does: the document removed is kept in the browser tab, and handed
+    # back to Add.
+    kept = edited["backup"]
+    removed = model.remove_section(edited, "backup")
+    assert model.add_section(removed, "backup", kept) == edited
+
+
+def test_an_optional_section_cannot_be_a_bare_app_s_whole_config(
+    lib: SpeechLib,
+) -> None:
+    with pytest.raises(ValueError, match="cannot be optional"):
+        App("talk", "talk-app", (Section("speech", lib, optional=True),), {}, bare=True)
+
+
+def test_the_summary_says_the_whole_config_in_the_table_s_words(
+    tmp_path: Path,
+) -> None:
+    speech, backup = SpeechLib(), SpeechLib()
+    model = _model(
+        tmp_path,
+        speech,
+        sections=(
+            Section("speech", speech, title="Voice"),
+            Section("backup", backup, title="Backup voice"),
+        ),
+    )
+    config = {**DEFAULTS, "backup": {"module": {"type": "cloud-voice"}}}
+
+    # A problem in one, a required item missing in the other (the lexicon).
+    assert model.summary(config) == "❌ 2 sections need something: Voice, Backup voice."
+    assert model.summary(config, ["speech"]) == "❌ 1 section needs something: Voice."
+
+    speech.lexicon = True
+    ready = {**DEFAULTS, "backup": DEFAULTS["speech"]}
+    backup.lexicon = True
+    assert model.summary(ready) == (
+        "✅ Ready to run — 2 optional items missing: the first start will get them, "
+        "slower"
+    )
+    speech.downloaded = backup.downloaded = {"Ada"}
+    assert model.summary(ready) == "✅ Ready to run"

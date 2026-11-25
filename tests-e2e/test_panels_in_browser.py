@@ -40,6 +40,8 @@ from app_setup.secrets import SecretStore
 from app_setup.ui import config_page, secrets_panel, setup_panel
 
 DEFAULTS = {"speech": {"module": {"type": "local-voice"}}}
+# An item's line in a section's table.
+ITEM = ".app-setup-item"
 
 
 def _free_port() -> int:
@@ -148,7 +150,7 @@ def browser() -> Iterator[object]:
         launched.close()
 
 
-def _open_setup(served: Served, browser: object) -> Any:
+def _open_setup(served: "Served | ServedTwo", browser: object) -> Any:
     page = browser.new_page()  # type: ignore[attr-defined]
     page.goto(served.url)
     page.get_by_role("tab", name="Setup").click()
@@ -240,8 +242,8 @@ def test_one_item_is_prepared_from_its_row_with_its_progress(
     lib = served.lib
     lib.gate = threading.Event()  # holds the preparation once started
     page = _open_setup(served, browser)
-    lexicon = page.locator(".row", has_text="Lexicon").last
-    voice = page.locator(".row", has_text="Voice Ada").last
+    lexicon = page.locator(ITEM, has_text="Lexicon").last
+    voice = page.locator(ITEM, has_text="Voice Ada").last
     lexicon.get_by_text("Missing – required").wait_for()  # the first check's lines
     voice.get_by_text("Missing – optional").wait_for()
 
@@ -293,7 +295,7 @@ def test_a_key_saved_in_the_keys_tab_turns_its_row_ready_without_check(
     voice_id.wait_for()
     voice_id.fill("v-42")
     voice_id.press("Tab")  # the field left: its section checked again
-    key_row = page.locator(".row").filter(has_text=re.compile(r"CLOUD_VOICE_KEY"))
+    key_row = page.locator(ITEM).filter(has_text=re.compile(r"CLOUD_VOICE_KEY"))
     key_row.filter(has_text="Missing – required").last.wait_for()
 
     page.get_by_role("tab", name="Keys").click()
@@ -310,7 +312,7 @@ def test_a_key_saved_in_the_keys_tab_turns_its_row_ready_without_check(
 def test_an_extra_is_installed_from_its_line(served: Served, browser: object) -> None:
     served.lib.installed["local-voice"] = False
     page = _open_setup(served, browser)
-    line = page.locator(".row", has_text="local-voice extra").last
+    line = page.locator(ITEM, has_text="local-voice extra").last
     line.get_by_text("Missing – required").wait_for()
 
     line.get_by_role("button", name="Install").click()
@@ -335,16 +337,16 @@ def test_a_key_is_saved_from_its_line(served: Served, browser: object) -> None:
     # The library's own check, once the config is complete: its words for the extra.
     # Before it, app-setup's (from the package's metadata) say the extra is missing, so
     # the table is drawn again when the library's arrive.
-    page.locator(".row", has_text="cloud-voice extra").filter(
+    page.locator(ITEM, has_text="cloud-voice extra").filter(
         has_text="Ready"
     ).last.wait_for()
-    line = page.locator(".row", has_text="Missing – required").last
+    line = page.locator(ITEM, has_text="Missing – required").last
     line.get_by_text("CLOUD_VOICE_KEY").first.wait_for()
 
     line.locator("input[type=password]").fill("s3cret")
     line.get_by_role("button", name="Save").click()
 
-    page.locator(".row", has_text="CLOUD_VOICE_KEY").filter(
+    page.locator(ITEM, has_text="CLOUD_VOICE_KEY").filter(
         has_text="Ready"
     ).last.wait_for()
     assert served.folder.env_path.read_text() == 'CLOUD_VOICE_KEY="s3cret"\n'
@@ -464,7 +466,7 @@ def test_an_app_running_a_file_shows_the_form_read_only_and_installs_from_a_line
         assert page.get_by_role("button", name=name).count() == 0
     assert page.get_by_text("Unsaved changes").count() == 0
 
-    line = page.locator(".row", has_text="local-voice extra").last
+    line = page.locator(ITEM, has_text="local-voice extra").last
     line.get_by_text("Missing – required").wait_for()
     line.get_by_role("button", name="Install").click()
     line.get_by_text("Installing…").wait_for()
@@ -473,3 +475,134 @@ def test_an_app_running_a_file_shows_the_form_read_only_and_installs_from_a_line
 
     assert running_file.installer.runs == [["speech-local"]]
     assert running_file.path.read_bytes() == before  # never written
+
+
+class ServedTwo:
+    """A page of two sections: the speech section, needing its lexicon (open at load), and
+    an optional backup voice, ready (folded)."""
+
+    def __init__(self, url: str, folder: ConfigFolder, speech: SpeechLib) -> None:
+        self.url, self.folder, self.speech = url, folder, speech
+
+
+BACKUP = {"module": {"type": "local-voice", "voice": "Bo"}}
+
+
+@pytest.fixture
+def two_sections(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[ServedTwo]:
+    environ = _fake_host(monkeypatch)
+    speech, backup = SpeechLib(), SpeechLib()
+    backup.lexicon, backup.downloaded = True, {"Bo"}
+    defaults = {**DEFAULTS, "backup": BACKUP}
+    app = App(
+        name="browser",
+        host="app-setup",
+        sections=(
+            Section("speech", speech),
+            Section(
+                "backup", backup, title="Backup voice", optional=True, default=BACKUP
+            ),
+        ),
+        default_config=defaults,
+    )
+    folder = ConfigFolder(tmp_path, defaults)
+    port = _free_port()
+    model = AppModel(app, folder, SecretStore(folder.env_path, environ))
+    with gr.Blocks() as page:
+        with gr.Tab("Talk"):
+            gr.Markdown("The app's own session.")
+        with gr.Tab("Setup"):
+            setup_panel(model)
+    page.launch(server_name="127.0.0.1", server_port=port, prevent_thread_lock=True)
+    try:
+        yield ServedTwo(f"http://127.0.0.1:{port}/", folder, speech)
+    finally:
+        page.close()
+
+
+def _fold(page: Any, title: str) -> Any:
+    return page.locator(".app-setup-fold").filter(has_text=title)
+
+
+OPEN = re.compile(r"\bopen\b")
+
+
+def _toggle(fold: Any) -> Any:
+    """A fold's title line, a button: its class says whether the fold is open."""
+    return fold.locator("button.label-wrap").first
+
+
+def test_a_fold_is_opened_and_its_line_follows_a_module_switch(
+    two_sections: ServedTwo, browser: object
+) -> None:
+    page = _open_setup(two_sections, browser)
+    page.get_by_text("Speech — Local voice · ❌ 1 required item missing").wait_for()
+    ready = page.get_by_text("Backup voice — Local voice · ✅ Ready")
+    ready.wait_for()
+    backup = _fold(page, "Backup voice")
+    # The section needing something open, the ready one folded (its form not mounted).
+    _textbox(_fold(page, "Speech —"), "speed").wait_for()
+    sync_api.expect(_toggle(_fold(page, "Speech —"))).to_have_class(OPEN)
+    sync_api.expect(_toggle(backup)).not_to_have_class(OPEN)
+    assert not _textbox(backup, "speed").is_visible()
+
+    ready.click()
+    _textbox(backup, "speed").wait_for()
+    backup.get_by_label("Voice", exact=True).click()
+    page.get_by_role("option", name="Cloud voice (hosted)").click()
+
+    page.get_by_text(
+        "Backup voice — Cloud voice (hosted) · ❌ 1 problem in the config"
+    ).wait_for()
+    page.get_by_text("2 sections need something: Speech, Backup voice.").wait_for()
+
+
+def test_an_optional_section_is_removed_and_added_back_with_its_settings(
+    two_sections: ServedTwo, browser: object
+) -> None:
+    page = _open_setup(two_sections, browser)
+    page.get_by_text("Backup voice — Local voice · ✅ Ready").click()
+    backup = _fold(page, "Backup voice")
+    voice = _textbox(backup, "voice")
+    voice.wait_for()
+    sync_api.expect(voice).to_have_value("Bo")
+    voice.fill("Zed")
+    voice.press("Tab")
+
+    page.get_by_role("button", name="Remove Backup voice").click()
+    page.get_by_text("Backup voice — off").wait_for()
+    assert not backup.is_visible()
+    page.get_by_text("Unsaved changes — Save is at the bottom.").wait_for()
+
+    page.get_by_role("button", name="Add", exact=True).click()
+    # Back, open, with what was typed before it was removed.
+    sync_api.expect(_toggle(backup)).to_have_class(OPEN)
+    sync_api.expect(_textbox(backup, "voice")).to_be_visible()
+    sync_api.expect(_textbox(backup, "voice")).to_have_value("Zed")
+    page.get_by_text("Backup voice — off").wait_for(state="hidden")
+    page.get_by_role("button", name="Save", exact=True).last.click()
+    page.get_by_text("Saved.").wait_for()
+
+    assert json.loads(two_sections.folder.config_path.read_text())["backup"] == {
+        "module": {"type": "local-voice", "voice": "Zed"}
+    }
+
+
+def test_check_all_turns_a_fold_s_line_ready(
+    two_sections: ServedTwo, browser: object
+) -> None:
+    page = _open_setup(two_sections, browser)
+    page.get_by_text("Speech — Local voice · ❌ 1 required item missing").wait_for()
+    page.get_by_text("1 section needs something: Speech.").wait_for()
+
+    # Prepared elsewhere (a terminal, another app): Check all sees it.
+    two_sections.speech.lexicon = True
+    two_sections.speech.downloaded = {"Ada"}
+    page.get_by_role("button", name="Check all").click()
+
+    page.get_by_text("Speech — Local voice · ✅ Ready").wait_for()
+    page.get_by_text("✅ Ready to run", exact=True).wait_for()
+    # A check never folds a section: it stays open, ready.
+    sync_api.expect(_toggle(_fold(page, "Speech —"))).to_have_class(OPEN)

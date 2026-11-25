@@ -1,10 +1,12 @@
 ---
 code:
   - src/app_setup/app.py
+  - src/app_setup/form.py
   - src/app_setup/ui/panels.py
   - src/app_setup/ui/report.py
 tests:
   - tests/test_app.py
+  - tests/test_form.py
   - tests/ui/test_panels.py
   - tests/ui/test_report.py
   - tests-e2e/test_panels_in_browser.py

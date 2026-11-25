@@ -8,15 +8,18 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from app_setup.app import Problem, SetupItem
+from app_setup.app import Problem, SetupItem, summary_line
 from app_setup.secrets import SecretVariable
 
 __all__ = [
     "HEADER",
     "Progress",
     "config_report",
+    "config_summary",
     "item_status",
     "secrets_report",
+    "section_line",
+    "section_status",
     "setup_summary",
 ]
 
@@ -54,6 +57,42 @@ def setup_summary(items: Sequence[SetupItem]) -> str:
     if deferred:
         return f"✅ **Ready to run** — {optional}"
     return "✅ **Ready**"
+
+
+# The whole config's line, over the folds: the model's words (`AppModel.summary`), so an
+# app without gradio says it alike.
+config_summary = summary_line
+
+
+def section_status(
+    items: Sequence[SetupItem], problems: Sequence[Problem], installed: bool = True
+) -> str:
+    """A section's status in a fold's line, short, in the table's words."""
+    if not installed:
+        return "❌ not installed"
+    if problems:
+        return f"❌ {_count(len(problems), 'problem')} in the config"
+    blocking = sum(1 for item in items if item.blocking)
+    if blocking:
+        return f"❌ {_count(blocking, 'required item')} missing"
+    deferred = sum(1 for item in items if item.deferred)
+    if deferred:
+        return f"🟡 {_count(deferred, 'optional item')} missing"
+    return "✅ Ready"
+
+
+def section_line(
+    title: str,
+    modules: Sequence[str],
+    items: Sequence[SetupItem],
+    problems: Sequence[Problem],
+    installed: bool = True,
+) -> str:
+    """A fold's title line: ``<title> — <modules> · <status>``, the modules selected in
+    the section's choices (none: ``<title> · <status>``). *installed*: False for a section
+    whose library does not import."""
+    head = f"{title} — {' · '.join(modules)}" if modules else title
+    return f"{head} · {section_status(items, problems, installed)}"
 
 
 @dataclass(frozen=True)

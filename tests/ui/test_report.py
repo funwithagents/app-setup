@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 from app_setup.app import Problem, SetupItem
 from app_setup.secrets import SecretVariable
 from app_setup.ui.report import (
@@ -6,6 +8,7 @@ from app_setup.ui.report import (
     env_file_rows,
     item_status,
     secrets_report,
+    section_line,
     setup_summary,
 )
 
@@ -164,3 +167,30 @@ def test_each_variable_of_the_env_file_says_what_uses_it() -> None:
             "not named by the current config — unused: the shell sets it too, and wins",
         ),
     ]
+
+
+PROBLEM = Problem("speech", "/speech/module/voice_id", "voice_id is required")
+
+
+def test_a_fold_s_line_says_its_modules_and_its_status_short() -> None:
+    modules = ["Deepgram v2 (hosted)", "Silero VAD"]
+
+    def line(items: list[SetupItem], problems: list[Problem] = []) -> str:  # noqa: B006
+        return section_line("Speech recognition", modules, items, problems)
+
+    assert line([replace(EXTRA, status="ready")]) == (
+        "Speech recognition — Deepgram v2 (hosted) · Silero VAD · ✅ Ready"
+    )
+    assert line([VOICE]).endswith(" · 🟡 1 optional item missing")
+    assert line([VOICE, VOICE]).endswith(" · 🟡 2 optional items missing")
+    # Required before optional, the config's problems before both.
+    assert line([VOICE, LEXICON]).endswith(" · ❌ 1 required item missing")
+    assert line([EXTRA, LEXICON]).endswith(" · ❌ 2 required items missing")
+    assert line([EXTRA], [PROBLEM]).endswith(" · ❌ 1 problem in the config")
+    assert line([], [PROBLEM, PROBLEM]).endswith(" · ❌ 2 problems in the config")
+    # No module choice: the title and the status alone.
+    assert section_line("Camera", [], [KEY], []) == "Camera · ✅ Ready"
+    # A library that does not import.
+    assert section_line("Voice", [], [EXTRA], [], installed=False) == (
+        "Voice · ❌ not installed"
+    )
