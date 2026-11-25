@@ -949,15 +949,46 @@ def secrets_panel(model: AppModel, config: gr.State | None = None) -> None:
                 outputs=[secret_notice, secrets_md, env_revision],
             )
 
-    def on_load(*values: Config) -> tuple[str, int]:
-        return report(*values), next(_loads)
+    # The `SecretStore.revision` the key table shows, in this browser tab: noted with the
+    # table on page load. A key saved or removed anywhere else (on a line of the Setup
+    # panel, in another tab) changes it: the timer below sees it and draws both parts
+    # again, so no reload is needed. Noted here, not by the timer's first tick: a timer in
+    # a tab not shown yet only starts when the tab is first opened, maybe after the save.
+    seen = gr.State(None)
 
-    # On page load, and on each change of the config it follows.
+    def on_load(*values: Config) -> tuple[str, int, int]:
+        return report(*values), next(_loads), model.secrets.revision
+
+    # On page load.
     gr.on(
         None,
         on_load,
         inputs=inputs,
-        outputs=[secrets_md, env_revision],
+        outputs=[secrets_md, env_revision, seen],
+        show_progress="hidden",
+    )
+
+    # The key table follows the config it reads: a module chosen in the Setup panel's
+    # draft shows the key it needs at once.
+    if config is not None:
+        config.change(
+            report, inputs=inputs, outputs=[secrets_md], show_progress="hidden"
+        )
+
+    timer = gr.Timer(1)
+
+    def on_secrets_tick(last: int | None, rev: int, *values: Config) -> tuple[Any, ...]:
+        current_revision = model.secrets.revision
+        if last is None:
+            return gr.skip(), gr.skip(), current_revision
+        if last == current_revision:
+            return gr.skip(), gr.skip(), gr.skip()
+        return report(*values), rev + 1, current_revision
+
+    timer.tick(
+        on_secrets_tick,
+        inputs=[seen, env_revision, *inputs],
+        outputs=[secrets_md, env_revision, seen],
         show_progress="hidden",
     )
 

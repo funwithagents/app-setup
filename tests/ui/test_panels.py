@@ -184,6 +184,30 @@ def test_the_secrets_panel_reads_the_config_it_follows_else_the_saved_one(
     assert "`CLOUD_VOICE_KEY`" in _handler(alone, "on_load")()[0]
 
 
+def test_the_secrets_panel_follows_a_key_saved_elsewhere_without_a_reload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model = _model(tmp_path, environ=_environ(monkeypatch))
+    cloud = {"speech": {"module": {"type": "cloud-voice", "voice_id": "v"}}}
+    with gr.Blocks() as page:
+        secrets_panel(model, gr.State(cloud))
+    tick = _handler(page, "on_secrets_tick")
+
+    # The page loads: its table, and the store's revision that table shows.
+    shown, _, seen = _handler(page, "on_load")(cloud)
+    assert "❌ not set" in shown
+    assert tick(seen, 1, cloud) == (gr.skip(), gr.skip(), gr.skip())  # nothing new
+
+    # A key saved on a line of the Setup panel, or in another tab: the same store. Even
+    # when the timer's first tick comes after it (a tab not opened yet), it is seen.
+    model.secrets.set("CLOUD_VOICE_KEY", "s3cret")
+    report, revision, now = tick(seen, 1, cloud)
+
+    assert "`CLOUD_VOICE_KEY`" in report and "the folder's .env" in report
+    assert "not set" not in report
+    assert revision == 2 and now == model.secrets.revision  # the .env list drawn again
+
+
 def test_the_secrets_panel_keeps_the_env_file_s_variables_out_of_the_config_s_table(
     tmp_path: Path,
 ) -> None:

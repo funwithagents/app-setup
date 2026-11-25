@@ -342,3 +342,9 @@ def test_a_key_is_saved_from_its_line(served: Served, browser: object) -> None:
         has_text="Ready"
     ).last.wait_for()
     assert served.folder.env_path.read_text() == 'CLOUD_VOICE_KEY="s3cret"\n'
+
+    # The Keys tab follows, without a reload: the key comes from the folder's .env.
+    page.get_by_role("tab", name="Keys").click()
+    page.get_by_role("row", name="CLOUD_VOICE_KEY").filter(
+        has_text="the folder's .env"
+    ).wait_for()
