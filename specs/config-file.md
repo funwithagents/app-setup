@@ -17,7 +17,7 @@ tests:
 
 # Config file
 
-**Status:** Draft
+**Status:** Stable
 
 ## Purpose
 
@@ -38,12 +38,24 @@ This spec adds the file next to the folder, as a second **source** of the config
 
 In all three, the keys come from **the `.env` next to the config** — `DIR/.env` for a folder, the `.env` in the file's directory for a file — unless **`--env PATH`** names another. The shell still wins over the file ([secrets.md](secrets.md)). One rule, the same whether an app runs from a folder or a file: the secrets sit beside the config they serve, and one `.env` serves every config of a directory (all the example configs of a project, say). A project keeping configs in its repository lists `.env` in its `.gitignore`.
 
+## The config's shape: a library's own document, or one key per library
+
+An app composing several libraries has a config of its own: one key per section, each holding that library's document (`{"agent": …, "speech": …, "vision": …}`). The keys are its format: they say which library owns which part.
+
+**A library's demo has no config of its own:** it shows one library, and its only setting of its own (whether a session starts at launch) is kept apart, in `launch.json`. So its config **is the library's document**, with no key around it — the same document the library's loader reads, its example configs hold, and its documentation shows. One format to learn: a config saved in the demo runs with the library alone, and an example config runs in the demo, as they are.
+
+- **An app with one section declares it:** `App(..., bare=True)`. Its folder's `config.json`, a `--config` file, a config app's file and its `default_config` are then that section's document. The model gives the panels the usual shape, `{section: document}`, wrapping what it reads and unwrapping what it saves, so nothing else changes. Declared, not inferred from the number of sections: an app adding a second section later would otherwise change its files' format without saying so.
+- **An app with several sections** (or with one, not declared bare) keeps one key per section, in its folder and in its files alike.
+- A demo that later needs a setting of its own becomes an app of two sections (its own and the library's), and takes the keyed shape then.
+
+`App(bare=True)` with more than one section is refused (`ValueError`).
+
 ## A config file
 
-`ConfigFile(path, *, section=None, env_path=None, writable=False)`:
+`ConfigFile(path, *, env_path=None, writable=False)`:
 
 - **The file must exist.** Building it with a path that is not a file raises `ConfigFileError` (a `ValueError`) naming it: an app given `--config` with a missing file stops at launch with that message and serves no page. Nothing is created, and there is no default to write: the file is the user's. The same for a file that is not valid JSON or not an object.
-- **`section`**: with a section name, the file **is that section's document** (a library's config, exactly what its contract describes), and the model sees it as `{section: document}`. Without one, the file holds the whole app config, one key per section, like a folder's `config.json`. So a library's own example configs, each one document of the library, run as they are, and an app composing several libraries runs a file in its own shape.
+- **Its shape is the app's** (above): a bare app's file is its library's document, so the library's example configs run as they are; a keyed app's file holds one key per section, like its folder's `config.json`.
 - **`writable`**: whether Save writes back to the file. False for an app running a file (`--config`); true for a config app. A file that is not writable is never written, whatever is clicked; `save` and `reset` raise `RuntimeError`.
 - **Reset** has nothing to go back to (a file has no default): a config app offers **Revert** only, which reads the file again.
 - **Relative paths** in the config resolve against the file's directory (`base_dir`), as the libraries' own `from_json_file` do ([module-contract.md](module-contract.md), "Relative paths").
@@ -59,8 +71,8 @@ The file is read again each time the config is asked for (`saved_config()`), so 
 |---|---|---|
 | `base_dir` (where relative paths resolve; `AppModel.path`) | the folder | the file's directory |
 | `env_path` | `DIR/.env`, or `--env` | the `.env` in the file's directory, or `--env` |
-| `read_config()` | `config.json` | the file (wrapped in `{section: …}` with a section) |
-| `save_config(config)` | writes `config.json` | writes the file (the section's document alone with a section); `RuntimeError` when not writable |
+| `read_config()` | `config.json` | the file |
+| `save_config(config)` | writes `config.json` | writes the file; `RuntimeError` when not writable |
 | `reset_config()` | writes the default back | `RuntimeError`: no default |
 | `writable` | true | as given |
 | `resettable` | true | false |
@@ -76,8 +88,8 @@ The file is read again each time the config is asked for (`saved_config()`), so 
 def add_config_arguments(parser: argparse.ArgumentParser, app: App) -> None: ...
     # --folder DIR (default: default_folder(app.name)) | --config FILE, one or the other; --env PATH
 
-def open_source(options: argparse.Namespace, app: App, *, section: str | None = None) -> ConfigFolder | ConfigFile: ...
-    # --config FILE: a ConfigFile, not writable, with `section`; else the ConfigFolder; --env on either.
+def open_source(options: argparse.Namespace, app: App) -> ConfigFolder | ConfigFile: ...
+    # --config FILE: a ConfigFile, not writable; else the ConfigFolder; --env on either.
     # Raises ConfigFileError for a missing or unreadable file.
 ```
 
@@ -91,7 +103,7 @@ add_config_arguments(parser, APP)
 add_start_arguments(parser)
 options = parser.parse_args()
 try:
-    source = open_source(options, APP, section="speech")   # a library's demo: its file is one document
+    source = open_source(options, APP)   # a bare demo: the file is the library's document
 except ConfigFileError as exc:
     parser.error(str(exc))
 model = AppModel(APP, source, locked=session.running)
@@ -118,7 +130,7 @@ The Secrets panel is unchanged: it writes to the source's `.env`, and its title 
 def add_config_app_arguments(parser: argparse.ArgumentParser) -> None: ...
     # FILE (positional, required), --env PATH, --host, --port
 
-def open_config_app(options: argparse.Namespace, app: App, *, section: str | None = None) -> AppModel: ...
+def open_config_app(options: argparse.Namespace, app: App) -> AppModel: ...
     # a writable ConfigFile (ConfigFileError for a missing file), its .env loaded
 ```
 
@@ -126,13 +138,14 @@ A library's config app is then a few lines in its project, naming its contract:
 
 ```python
 APP = App(name="speech-lib-config", host="speech-lib",
-          sections=(Section("speech", speech_lib.setup, title="Speech"),), default_config={})
+          sections=(Section("speech", speech_lib.setup, title="Speech"),),
+          default_config={"module": {"type": "local-voice"}}, bare=True)
 
 parser = argparse.ArgumentParser(description="Edit a speech-lib config file.")
 add_config_app_arguments(parser)
 options = parser.parse_args()
 try:
-    model = open_config_app(options, APP, section="speech")
+    model = open_config_app(options, APP)
 except ConfigFileError as exc:
     parser.error(str(exc))
 config_page(model).launch(server_name=options.host, server_port=options.port)
@@ -144,17 +157,18 @@ An app that already has a page (and a session) may instead offer its own command
 
 ## Testing
 
-- `tests/test_config_file.py`: a missing file, a directory, invalid JSON and a non-object each refused, naming the file; a section's document read as `{section: …}` and saved back alone; a whole-config file read and saved as it is; a file not writable never written (`save` and `reset` raise, the file's bytes unchanged); relative paths against the file's directory; the `.env` next to the file, or `--env`'s; a hand edit seen at the next read.
+- `tests/test_config_file.py`: a missing file, a directory, invalid JSON and a non-object each refused, naming the file; a bare app's file read as `{section: …}` and saved back as the document alone, a keyed app's as it is; a file not writable never written (`save` and `reset` raise, the file's bytes unchanged); relative paths against the file's directory; the `.env` next to the file, or `--env`'s; a hand edit seen at the next read.
+- `tests/test_app.py`: a bare app's folder holds the library's document, written from its default, read wrapped and saved unwrapped; `bare=True` with two sections refused.
 - `tests/test_launch.py`: `--folder` and `--config` exclusive; neither gives the default folder; `--env` on both; `open_source` for each; a missing file's error.
 - `tests/test_autostart.py`: from a file, the session starts at launch, `--no-start` excepted, whatever `App.autostart` and whatever a `launch.json` nearby holds.
 - `tests/ui/test_panels.py`: a read-only model draws the file's line, a read-only form, the table and its actions, and no Save, Revert, Reset, unsaved line or launch checkbox; a key saved from a line reaches the file's `.env`.
-- `tests/ui/test_config_page.py`: the page has Setup and Secrets only; Save writes the file (a section's document alone); Revert reads it again; no Reset.
+- `tests/ui/test_config_page.py`: the page has Setup and Secrets only; Save writes the file (a bare app's: the library's document alone); Revert reads it again; no Reset.
 - Browser (`tests-e2e/test_panels_in_browser.py`): a config app edits a file and saves it; an app running a file shows the form read-only and installs from a line.
 
 ## Changes to the other specs, once this one is Stable
 
-- [config-folder.md](config-folder.md): `env_path` given or `DIR/.env`; `base_dir`, `writable`, `resettable`; "An app runs from a folder" becomes "from a folder or a file".
-- [app.md](app.md): `AppModel(app, source, …)`, `source`, `editable`; `reset` refused for a source without a default.
+- [config-folder.md](config-folder.md): `env_path` given or `DIR/.env`; `base_dir`, `writable`, `resettable`; "An app runs from a folder" becomes "from a folder or a file"; `config.json` holds a bare app's document as it is.
+- [app.md](app.md): `App(bare=True)` and its wrapping; `AppModel(app, source, …)`, `source`, `editable`; `reset` refused for a source without a default.
 - [autostart.md](autostart.md): the file rule in `starts_at_launch`; no checkbox without launch settings.
 - [secrets.md](secrets.md): the `.env` is the source's (next to the config, or `--env`).
 - [ui.md](ui.md): the read-only Setup panel; `config_page`.
