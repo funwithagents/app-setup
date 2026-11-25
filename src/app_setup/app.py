@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from app_setup.config_file import ConfigFile
 from app_setup.contract import (
     ContractError,
     Description,
@@ -39,6 +40,9 @@ __all__ = [
 ]
 
 ContractSource = SetupContract | Callable[[], SetupContract]
+
+# Where the config comes from: the app's folder, or a single file (specs/config-file.md).
+ConfigSource = ConfigFolder | ConfigFile
 
 
 @dataclass(frozen=True)
@@ -71,6 +75,18 @@ class App:
     # Whether the app starts its session at launch by default; None: the app has no
     # autostart. The user's choice is kept in the folder's launch.json (specs/autostart.md).
     autostart: bool | None = None
+    # A one-section app whose config *is* its section's document, with no key around it:
+    # its folder's config.json, its files and its default config are the library's own
+    # document (a library's demo). The model wraps it as `{section: document}` for the
+    # panels (specs/config-file.md).
+    bare: bool = False
+
+    def __post_init__(self) -> None:
+        if self.bare and len(self.sections) != 1:
+            raise ValueError(
+                f"{self.name}: a bare app has exactly one section, "
+                f"not {len(self.sections)}"
+            )
 
 
 @dataclass(frozen=True)
@@ -202,24 +218,30 @@ def _named(variables: Sequence[str], *texts: str) -> str | None:
 class AppModel:
     """The app's state and actions, shared by every browser tab on the page.
 
-    Building it makes the folder ready (created, the default config written when there is
-    none). Without *secrets*, it opens the folder's ``.env`` over ``os.environ`` and loads
-    it, so the libraries find their keys. *locked*, the app's, says when the config is in
-    use (a session running): saving and resetting are refused then.
+    *source* is where the config comes from: the app's folder (`ConfigFolder`), or a single
+    file (`ConfigFile`). Building it makes the source ready (a folder created, the default
+    config written when there is none). Without *secrets*, it opens the source's ``.env``
+    over ``os.environ`` and loads it, so the libraries find their keys. *locked*, the
+    app's, says when the config is in use (a session running): saving and resetting are
+    refused then.
+
+    The config the model gives and takes always has one key per section; a bare app's
+    source holds its one section's document alone, wrapped on reading and unwrapped on
+    saving.
     """
 
     def __init__(
         self,
         app: App,
-        folder: ConfigFolder,
+        source: ConfigSource,
         secrets: SecretStore | None = None,
         locked: Callable[[], bool] | None = None,
     ) -> None:
         self.app = app
-        self.folder = folder
-        folder.ensure()
+        self.source = source
+        source.ensure()
         if secrets is None:
-            secrets = SecretStore(folder.env_path)
+            secrets = SecretStore(source.env_path)
             secrets.load()
         self.secrets = secrets
         self._locked = locked
@@ -269,12 +291,18 @@ class AppModel:
     @property
     def _base_dir(self) -> str:
         """What a section's relative paths are relative to, handed to its library."""
-        return str(self.folder.path)
+        return str(self.source.base_dir)
 
     @property
     def path(self) -> Path:
-        """The app's folder: where a section's relative paths resolve."""
-        return self.folder.path
+        """Where a section's relative paths resolve: the app's folder, or the file's
+        directory."""
+        return self.source.base_dir
+
+    @property
+    def editable(self) -> bool:
+        """Whether the config can be saved: false for an app running a file as it is."""
+        return self.source.writable
 
     # --- The config.
 
@@ -283,7 +311,7 @@ class AppModel:
         the app's default; None for an app with no autostart."""
         if self.app.autostart is None:
             return None
-        value = self.folder.read_launch().get("autostart")
+        value = self.source.read_launch().get("autostart")
         return value if isinstance(value, bool) else self.app.autostart
 
     def set_autostart(self, on: bool) -> None:
@@ -291,14 +319,27 @@ class AppModel:
         locked: it only matters at the next launch."""
         if self.app.autostart is None:
             raise RuntimeError(f"{self.title} has no autostart.")
-        self.folder.save_launch({**self.folder.read_launch(), "autostart": bool(on)})
+        self.source.save_launch({**self.source.read_launch(), "autostart": bool(on)})
 
     def locked(self) -> bool:
         """Whether the app is using the saved config (a session running)."""
         return self._locked is not None and self._locked()
 
+    def _wrap(self, stored: Mapping[str, Any]) -> dict[str, Any]:
+        """The config as the source holds it, with one key per section."""
+        if not self.app.bare:
+            return dict(stored)
+        return {self.app.sections[0].name: dict(stored)}
+
+    def _unwrap(self, config: Mapping[str, Any]) -> dict[str, Any]:
+        """The config as the source keeps it: a bare app's section document alone."""
+        if not self.app.bare:
+            return dict(config)
+        document = config.get(self.app.sections[0].name)
+        return dict(document) if isinstance(document, Mapping) else {}
+
     def saved_config(self) -> dict[str, Any]:
-        return self.folder.read_config()
+        return self._wrap(self.source.read_config())
 
     def unsaved(self, draft: Mapping[str, Any]) -> bool:
         """Whether *draft* differs from the saved config. The whole config is compared, not
@@ -309,12 +350,15 @@ class AppModel:
     def save(self, config: Mapping[str, Any]) -> None:
         """Save *config* as the current one. Refused while the config is locked."""
         self._refuse_when_locked()
-        self.folder.save_config(config)
+        self.source.save_config(self._unwrap(config))
 
     def reset(self) -> dict[str, Any]:
-        """Save the app's default config as the current one, and return it."""
+        """Save the app's default config as the current one, and return it. Refused for a
+        source without a default (a file)."""
+        if not self.source.resettable:
+            raise RuntimeError("This config has no default to reset to.")
         self._refuse_when_locked()
-        return self.folder.reset_config()
+        return self._wrap(self.source.reset_config())
 
     def _refuse_when_locked(self) -> None:
         if self.locked():

@@ -6,6 +6,9 @@ module switched, an optional object turned on or off, a voice chosen from a list
 the page's revision, which draws the form again; a plain value edit does not, so typing never
 loses focus. A field finished (a text box left or Enter pressed, a box ticked, a value chosen)
 also bumps its section's ``edited`` state, which checks that section again.
+
+Drawn read-only (an app running a file as it is), every field is shown and none is editable:
+no listener, no module switch, no list button.
 """
 
 from __future__ import annotations
@@ -92,7 +95,11 @@ def _finished(
 
 
 def _field(
-    field: FormField, full: Path, draft: gr.State, edited: gr.State | None
+    field: FormField,
+    full: Path,
+    draft: gr.State,
+    edited: gr.State | None,
+    readonly: bool = False,
 ) -> None:
     def write(raw: Any, config: Config) -> Config:
         value, error = coerce(field, raw)
@@ -112,7 +119,7 @@ def _field(
             value=value,
             label=_label(field),
             info=(field.spec.description or "") + ("" if present else unset),
-            interactive=True,
+            interactive=not readonly,
         )
     elif field.widget == "dropdown":
         values = {json.dumps(choice): choice for choice in field.choices}
@@ -123,23 +130,25 @@ def _field(
             value=json.dumps(field.value) if present else "",
             label=_label(field),
             info=field.spec.description,
-            interactive=True,
+            interactive=not readonly,
         )
 
         def write_choice(raw: Any, config: Config) -> Config:
             return write(values.get(raw, "") if raw else "", config)
 
-        # A value chosen is a field finished.
-        _finished(component, ["input"], write_choice, draft, edited)
+        if not readonly:
+            # A value chosen is a field finished.
+            _finished(component, ["input"], write_choice, draft, edited)
         return
     elif field.widget == "json":
         component = gr.Code(
             value=json.dumps(field.value, indent=2) if present else "",
             language="json",
             label=_label(field) + " — " + (field.spec.description or ""),
-            interactive=True,
+            interactive=not readonly,
         )
-        _finished(component, ["blur"], write, draft, edited)
+        if not readonly:
+            _finished(component, ["blur"], write, draft, edited)
         return
     else:
         # Text and numbers alike: a field not set is empty, its default shown in grey (the
@@ -150,8 +159,10 @@ def _field(
             label=_label(field),
             info=_number_info(field),
             placeholder=default or ("a number" if field.widget != "text" else ""),
-            interactive=True,
+            interactive=not readonly,
         )
+    if readonly:
+        return
     if isinstance(component, gr.Checkbox):
         # A box ticked is a field finished.
         _finished(component, ["input"], write, draft, edited)
@@ -164,14 +175,22 @@ def _field(
     _finished(component, ["blur", "submit"], write, draft, edited)
 
 
-def _raw(item: FormRaw, full: Path, draft: gr.State, edited: gr.State | None) -> None:
+def _raw(
+    item: FormRaw,
+    full: Path,
+    draft: gr.State,
+    edited: gr.State | None,
+    readonly: bool = False,
+) -> None:
     present = item.value is not ABSENT
     component = gr.Code(
         value=json.dumps(item.value, indent=2) if present else "",
         language="json",
         label=f"{item.label} — {item.description or 'free-form JSON'}",
-        interactive=True,
+        interactive=not readonly,
     )
+    if readonly:
+        return
 
     def write(raw: Any, config: Config) -> Config:
         value, error = coerce(item, raw)
@@ -240,15 +259,16 @@ def _item(
     draft: gr.State,
     revision: gr.Number,
     edited: gr.State | None,
+    readonly: bool = False,
 ) -> None:
     if isinstance(item, FormField):
-        _field(item, (section, *item.path), draft, edited)
+        _field(item, (section, *item.path), draft, edited, readonly)
     elif isinstance(item, FormRaw):
-        _raw(item, (section, *item.path), draft, edited)
+        _raw(item, (section, *item.path), draft, edited, readonly)
     elif isinstance(item, FormChoice):
-        _choice(model, section, item, draft, revision)
+        _choice(model, section, item, draft, revision, readonly)
     else:
-        _group(model, section, item, draft, revision, edited)
+        _group(model, section, item, draft, revision, edited, readonly)
 
 
 def _choice(
@@ -257,6 +277,7 @@ def _choice(
     item: FormChoice,
     draft: gr.State,
     revision: gr.Number,
+    readonly: bool = False,
 ) -> None:
     keys = {json.dumps(value): value for _, value in item.options}
     selected = json.dumps(item.selected) if item.selected is not None else None
@@ -264,8 +285,10 @@ def _choice(
         choices=[(title, json.dumps(value)) for title, value in item.options],
         value=selected if selected in keys else None,
         label=item.label,
-        interactive=True,
+        interactive=not readonly,
     )
+    if readonly:
+        return  # the module shown, not switched; no list to choose from
 
     def switch(key: str | None, config: Config, rev: int) -> tuple[Config, int]:
         node = get_at(config, (section, *item.path))
@@ -296,6 +319,7 @@ def _group(
     draft: gr.State,
     revision: gr.Number,
     edited: gr.State | None,
+    readonly: bool = False,
 ) -> None:
     full = (section, *group.path)
     if group.path:
@@ -309,7 +333,7 @@ def _group(
         switch = gr.Checkbox(
             value=group.enabled,
             label=f"Configure {group.title or group.path[-1]}",
-            interactive=True,
+            interactive=not readonly,
         )
 
         # The object's own module choice, if it has one: switched on, it starts on a module.
@@ -327,16 +351,21 @@ def _group(
                 return config, rev  # already so: no redraw
             return toggle_group(config, full, enabled, choice), rev + 1
 
-        switch.input(
-            toggle, inputs=[switch, draft, revision], outputs=[draft, revision]
-        )
+        if not readonly:
+            switch.input(
+                toggle, inputs=[switch, draft, revision], outputs=[draft, revision]
+            )
         if not group.enabled:
             return
     main = [i for i in group.items if not _advanced(i)]
     advanced = [i for i in group.items if _advanced(i)]
     for item in main:
-        _item(model, section, item, draft, revision, edited)
-    if group.options_list and not any(isinstance(i, FormChoice) for i in group.items):
+        _item(model, section, item, draft, revision, edited, readonly)
+    if (
+        group.options_list
+        and not readonly
+        and not any(isinstance(i, FormChoice) for i in group.items)
+    ):
         _options_picker(model, section, group.options_list, group.path, draft, revision)
     if advanced:
         # A nested object names its own block, so it is not read as the next heading's.
@@ -345,7 +374,7 @@ def _group(
         )
         with gr.Accordion(label, open=False):
             for item in advanced:
-                _item(model, section, item, draft, revision, edited)
+                _item(model, section, item, draft, revision, edited, readonly)
 
 
 def _advanced(item: FormItem) -> bool:
@@ -366,10 +395,12 @@ def render_section(
     draft: gr.State,
     revision: gr.Number,
     edited: gr.State | None = None,
+    readonly: bool = False,
 ) -> None:
     """Draw the form of section *name* of *config*: its fields, from its library's
     schema; or why it cannot be drawn yet (its library not installed). Given *edited*
-    (a counter), each field finished bumps it: the panel checks the section again."""
+    (a counter), each field finished bumps it: the panel checks the section again.
+    *readonly*: every field shown, none editable, no module switch, no list button."""
     section = model.section(name)
     description = model.description(name)
     if description is None:
@@ -387,4 +418,5 @@ def render_section(
         draft,
         revision,
         edited,
+        readonly,
     )

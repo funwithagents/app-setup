@@ -73,3 +73,13 @@ def test_the_default_folder_follows_xdg_config_home(
 
     monkeypatch.delenv("XDG_CONFIG_HOME")
     assert default_folder("talk") == Path.home() / ".config" / "talk"
+
+
+def test_the_env_is_the_folder_s_unless_another_is_given(tmp_path: Path) -> None:
+    folder = ConfigFolder(tmp_path / "app", DEFAULTS)
+    elsewhere = ConfigFolder(tmp_path / "app", DEFAULTS, env_path=tmp_path / "k.env")
+
+    assert folder.env_path == tmp_path / "app" / ".env"
+    assert elsewhere.env_path == tmp_path / "k.env"
+    assert folder.base_dir == tmp_path / "app"
+    assert folder.writable and folder.resettable

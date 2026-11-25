@@ -1,8 +1,8 @@
 """The app's folder: its current config and its secrets (specs/config-folder.md).
 
-An app runs from a folder, not from a config file. The folder holds ``config.json`` (the
+An app runs from a folder or from a single file ([config_file.py](config_file.py)). The folder holds ``config.json`` (the
 config the Setup panel saves and the app runs with: one document per section) and ``.env``
-(the secrets, [secrets.py](secrets.py)). The app's default config is not in the folder: it
+(the secrets, [secrets.py](secrets.py), unless another ``.env`` is given). The app's default config is not in the folder: it
 is the starting point written there the first time, and what "Reset" goes back to. An app
 may keep its own files in the folder too; app-setup leaves them alone.
 """
@@ -32,7 +32,7 @@ def default_folder(app_name: str) -> Path:
     return root / app_name
 
 
-def _write_json(path: Path, data: Any) -> None:
+def write_json(path: Path, data: Any) -> None:
     """Write *data* as indented JSON, replacing the file in one step, so a reader never sees
     half a file."""
     text = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
@@ -46,7 +46,7 @@ def _write_json(path: Path, data: Any) -> None:
         raise
 
 
-def _read_object(path: Path) -> dict[str, Any]:
+def read_json_object(path: Path) -> dict[str, Any]:
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
@@ -63,9 +63,16 @@ def _read_object(path: Path) -> dict[str, Any]:
 class ConfigFolder:
     """The files of one app's folder."""
 
-    def __init__(self, path: Path, default_config: Mapping[str, Any]) -> None:
+    def __init__(
+        self,
+        path: Path | str,
+        default_config: Mapping[str, Any],
+        *,
+        env_path: Path | str | None = None,
+    ) -> None:
         self.path = Path(path)
         self._default = copy.deepcopy(dict(default_config))
+        self._env_path = Path(env_path) if env_path is not None else None
 
     @property
     def config_path(self) -> Path:
@@ -73,7 +80,23 @@ class ConfigFolder:
 
     @property
     def env_path(self) -> Path:
-        return self.path / ".env"
+        """The ``.env`` the keys come from: the folder's, unless another was given."""
+        return self._env_path if self._env_path is not None else self.path / ".env"
+
+    @property
+    def base_dir(self) -> Path:
+        """Where the config's relative paths resolve: the folder."""
+        return self.path
+
+    @property
+    def writable(self) -> bool:
+        """Save writes ``config.json``."""
+        return True
+
+    @property
+    def resettable(self) -> bool:
+        """Reset writes the default config back."""
+        return True
 
     @property
     def launch_path(self) -> Path:
@@ -89,23 +112,23 @@ class ConfigFolder:
         """Create the folder, and write the default config when there is none."""
         self.path.mkdir(parents=True, exist_ok=True)
         if not self.config_path.exists():
-            _write_json(self.config_path, self._default)
+            write_json(self.config_path, self._default)
 
     def read_config(self) -> dict[str, Any]:
-        return _read_object(self.config_path)
+        return read_json_object(self.config_path)
 
     def save_config(self, config: Mapping[str, Any]) -> None:
-        _write_json(self.config_path, dict(config))
+        write_json(self.config_path, dict(config))
 
     def read_launch(self) -> dict[str, Any]:
         """The launch settings; empty while none was saved."""
         if not self.launch_path.exists():
             return {}
-        return _read_object(self.launch_path)
+        return read_json_object(self.launch_path)
 
     def save_launch(self, settings: Mapping[str, Any]) -> None:
         self.path.mkdir(parents=True, exist_ok=True)
-        _write_json(self.launch_path, dict(settings))
+        write_json(self.launch_path, dict(settings))
 
     def reset_config(self) -> dict[str, Any]:
         """Write the default config back as the current one, and return it."""
