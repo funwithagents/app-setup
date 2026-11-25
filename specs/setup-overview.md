@@ -25,35 +25,43 @@ This spec makes the panel read like a summary first: **one line per section**, e
 ## The panel, from top to bottom
 
 ```
-Setup                                              [Check all] [Install all] [Prepare all] [Test all]
+Setup
 ❌ 1 section needs something: Voice.
 ▸ Agent — Anthropic · ✅ Ready
 ▸ Speech recognition — mlx-audio · 🟡 1 optional item missing
 ▾ Voice — Phonon (local) · ❌ 1 required item missing
-    ┌ form ───────────────────────────┐ ┌ items ──────────────────────────────────────┐
-    │ Module  [Phonon (local) ▾]      │ │ Item         Status        Explanation  Action │
-    │ Voice   [Juniper        ▾]      │ │ Phonon model ❌ Missing     …         [Prepare] │
-    │ ▸ Advanced                      │ │ [Check] [Install all] [Prepare all] [Test]   │
-    └─────────────────────────────────┘ └─────────────────────────────────────────────┘
+    Settings                          ┌ On this machine ──────────────────────────────┐
+    Module  [Phonon (local) ▾]        │ ❌ 1 required item missing                     │
+    Voice   [Juniper        ▾]        │ Item          Status      Explanation   Action │
+    ▸ Advanced                        │ Phonon model  ❌ Missing   …          [Prepare] │
+    ✅ The config is valid.            │ [Check] [Install all] [Prepare all] [Test]    │
+                                      └───────────────────────────────────────────────┘
     [Remove Voice]                                        (optional sections only)
 Microphone processing — off                                                        [Add]
 Hand signs — off                                                                   [Add]
+[Check all] [Install all] [Prepare all] [Test all]          (two sections used or more)
                                                          Unsaved changes. [Save] [Revert] [Reset]
 ```
 
 - **What stays as it is:** the launch checkbox, the "Configuration" title and its lines, the unsaved lines, Save, Revert and Reset at the bottom, the read-only panel of an app running a file ([config-file.md](config-file.md)), the items table and its actions ([ui.md](ui.md)).
-- **The whole config's actions, on top:** **Check all**, **Install all**, **Prepare all**, **Test all**, and a summary line under them. They act on every section the config uses, as each section's own buttons act on one:
+- **The whole config's line, on top**, under the Configuration lines. It says the whole in one line, in the table's words: "✅ Ready to run", "✅ Ready to run — 2 optional items missing: the first start will get them, slower", "❌ 2 sections need something: Voice, Agent.". It follows every check, a section's own included.
+- **The whole config's actions, at the end**, after the folds and just above Save: **Check all**, **Install all**, **Prepare all**, **Test all**, and their output box. They act on every section the config uses, as each section's own buttons act on one. They are shown only while the config uses **two sections or more**: with one, they would repeat its own (Add and Remove change the count).
   - **Check all** checks every section again (its problems, its table, its fold's line).
-  - **Install all** installs every host extra any section misses, in **one** uv run, its output in an output box under the summary.
+  - **Install all** installs every host extra any section misses, in **one** uv run, its output in the output box.
   - **Prepare all** prepares every preparable item not ready, in every section, at the same time, each on its own line.
   - **Test all** runs each section's `probe`, one after the other, and writes one line per section in the output box: `✅ Voice: …` / `❌ Agent: …`.
-  - The summary says the whole in one line, in the table's words: "✅ Ready to run", "✅ Ready to run — 2 optional items missing: the first start will get them, slower", "❌ 2 sections need something: Voice, Agent.". It follows every check, a section's own included.
 - **One fold per section used** (a `gr.Accordion`), in the app's order. Its title line is the section's summary: `<title> — <modules> · <status>`.
   - `<modules>` is the title of the module selected in each module choice of the section, in the form's order, joined by ` · ` (`Phonon (local)`, `Deepgram v2 (hosted) · Silero VAD`); a section with no module choice has none (`Camera · ✅ Ready`).
   - `<status>` is the section's summary in the table's words, short: `✅ Ready`, `🟡 2 optional items missing`, `❌ 1 required item missing`, `❌ 2 problems in the config`. A section whose library does not import reads `❌ not installed`.
   - It is updated by every check of the section, and by each change of the form's structure (a module switched).
-  - **Folded or open:** when the page loads, a section that needs something (a problem, a required item missing) is open, the others folded. Afterwards the user opens and closes them; a check never folds or opens one.
-- **Inside an open fold, two columns** side by side, each half the width: the **form** on the left; on the right, the section's summary, its problems, its **items table** and its own **Check**, **Install all**, **Prepare all**, **Test**, then its output box. On a narrow window the columns stack, form first.
+  - **Folded or open when the page loads:** each section decides alone, by its `Section(open=...)`:
+    - `"needs"` (the default): open when the section needs something (a problem in the config, a required item missing), folded otherwise.
+    - `"always"`: open. `"folded"`: folded.
+    - There is no rule of the panel's own, a single section included: a one-section app that wants its section open declares `open="always"`.
+    - Afterwards the user opens and closes them; a check never folds or opens one.
+- **Inside an open fold, two titled columns** side by side, each half the width; on a narrow window they stack, settings first:
+  - **Settings**, on the left: the form, then right under it the section's **config problems** ("✅ The config is valid." or the problems with their pointers): they are about what was typed.
+  - **On this machine**, on the right, set apart by a light background and border (a panel): the section's status line, its **items table**, then its own **Check**, **Install all**, **Prepare all**, **Test** as small buttons on one row, then its output box. The table's **Action** title sits over the rows' buttons.
 - **An optional section** (below) that the config uses has a **Remove <title>** button under its two columns. One the config does not use is a single line, `<title> — off`, with an **Add** button, in the app's order among the others.
 
 ## Optional sections
@@ -79,31 +87,37 @@ class Section:
     ...
     optional: bool = False
     default: Mapping[str, Any] | None = None
+    open: Literal["needs", "always", "folded"] = "needs"  # its fold at page load
 
 class AppModel:
     def optional_off(self, config) -> list[str]: ...    # the optional sections the config leaves out
-    def add_section(self, config, name) -> dict: ...    # the config with *name*'s default document
+    def add_section(self, config, name, document=None) -> dict: ...  # *document* (the one removed earlier), else the default, else {}
     def remove_section(self, config, name) -> dict: ... # the config without *name*
     def summary(self, config, sections=None) -> str: ...  # the whole config's line, in the table's words
+    def section_title(self, name) -> str: ...           # the app's title, else the library's, else the key
 ```
 
-`app_setup.ui.report` gains `section_line(title, modules, items, problems)` (a fold's title line) and the whole config's summary wording; `app_setup.form` gains `selected_modules(schema, document)` (the module titles a fold's line shows).
+- Another value of `open` is refused (`ValueError`); so is `add_section` or `remove_section` on a section that is not optional.
+- The whole config's wording is `app_setup.app.summary_line(needing, deferred)`, so the model says it without gradio; `app_setup.ui.report` re-exports it as `config_summary`.
+- `app_setup.ui.report` gains `section_line(title, modules, items, problems, installed=True)` (a fold's title line; `installed=False`: `❌ not installed`); `app_setup.form` gains `selected_modules(schema, document)` (the module titles a fold's line shows).
+- The folds and the table's lines carry a class (`app-setup-fold`, `app-setup-item`), the whole config's actions `app-setup-all`: a page, or a test, finds them.
 
 ## Staying light
 
-The panel's cost in the browser grows with its components and its events ([ui.md](ui.md), "Reports"). The folds add one component per section and the overview one summary line and one output box; no timer is added, and no `gr.render`: the folds, the Add lines and the Remove buttons are drawn once, shown or hidden. A fold's title line is updated with the checks that already run.
+The panel's cost in the browser grows with its components and its events ([ui.md](ui.md), "Reports"). The folds add a few components per section (the fold, its two columns and their titles), the overview one summary line, four buttons and one output box; no timer is added, and no `gr.render`: the folds, the Add lines and the Remove buttons are drawn once, shown or hidden. A fold's title line, a section's status and the whole config's actions' visibility travel in the outputs of events that already run (the checks, the redraw on each change of structure). A folded fold's contents are not mounted in the browser.
 
 ## Testing
 
 - `tests/test_app.py`: an optional section absent is not used, not checked, not in the blockers; `add_section` writes its default, `remove_section` takes it out; a removed then added section in a draft gets the removed document back (the panel's memory); `optional` with `bare` refused; `summary` for a ready config, one with optional items missing, one with sections needing something.
+- `tests/test_form.py`: `selected_modules`, in the form's order, none for an optional object off.
 - `tests/ui/test_report.py`: a fold's line for each status, with and without modules.
-- `tests/ui/test_panels.py`: the overview's buttons act on every used section (Install all in one run with every section's extras, Test all one line per section); the folds' title lines follow a check and a module switch; a section needing something is open at load, a ready one folded; an optional section off shows its Add line, Add opens its fold with the default document, Remove takes it out; no Add or Remove on a read-only panel.
-- Browser: open a fold, switch its module and see its title line change; remove an optional section and add it back, its settings kept; Check all turns a fold's line ready.
+- `tests/ui/test_panels.py`: the whole config's buttons act on every used section (Install all in one run with every section's extras, Test all one line per section), shown with two sections, hidden with one, after the folds and before Save; the folds' title lines follow a check and a module switch; at load, each section's `open` ("needs" the default: open when it needs something; "always"; "folded"), a single section ready folded unless it says "always", another value refused, and a later redraw moving none; the fold's two titled columns, the config problems under the form, the machine's column a panel with small buttons; an optional section off shows its Add line, Add opens its fold with the default document, Remove takes it out; no Add or Remove on a read-only panel.
+- Browser: open a fold, switch its module and see its title line change; remove an optional section and add it back, its settings kept; Check all, under the folds and above Save, turns a fold's line ready; a single section needing something open, with Settings and On this machine, and no whole-config actions.
 
 ## Changes to the other specs, once this one is Stable
 
-- [app.md](app.md): `Section(optional, default)`, `used` leaving an absent optional section out, `optional_off`, `add_section`, `remove_section`, `summary`; its open question 1 (a section the user can switch off) answered.
-- [ui.md](ui.md): the panel's order (the overview's actions and summary, a fold per section, the two columns, the Add lines), the fold's title line; "One block per section" replaced.
+- [app.md](app.md): `Section(optional, default, open)`, `used` leaving an absent optional section out, `optional_off`, `add_section`, `remove_section`, `summary`; its open question 1 (a section the user can switch off) answered.
+- [ui.md](ui.md): the panel's order (the whole config's line on top, a fold per section with its two titled columns, the Add lines, the whole config's actions above Save), the fold's title line; "One block per section" replaced.
 
 Each moves to **Updated** with that change, and back to **Implemented** with the plan that builds it.
 

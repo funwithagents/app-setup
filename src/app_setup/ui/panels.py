@@ -23,7 +23,7 @@ from typing import Any
 
 import gradio as gr
 
-from app_setup.app import AppModel, Problem, SetupItem
+from app_setup.app import AppModel, Problem, SectionOpen, SetupItem
 from app_setup.folder import ConfigFolder
 from app_setup.form import selected_modules
 from app_setup.ui.form import render_section, section_title
@@ -355,8 +355,20 @@ def _draw_rows() -> _Table:
             scale=1,
             padding=False,
         )
-        with gr.Column(scale=0, min_width=_ACTION_WIDTH):
-            gr.Markdown(f"**{action}**")
+        # Laid out as a row's action (a column, then a row), so the title sits over the
+        # rows' buttons; gradio pads an HTML block by its block padding (horizontally
+        # `calc(var(--spacing-xl) + 2px)`), which a button has not: taken back, the title
+        # starts where the buttons do.
+        with (
+            gr.Column(scale=0, min_width=_ACTION_WIDTH),
+            gr.Row(equal_height=False),
+        ):
+            gr.HTML(
+                '<strong style="display:block;'
+                f'margin-left:calc(-1 * (var(--spacing-xl) + 2px))">{action}</strong>',
+                padding=False,
+                container=False,
+            )
     rows = []
     for _ in range(_ROWS):
         # The class names an item's line, apart from the rows around the table.
@@ -669,7 +681,9 @@ def _section_block(
         elem_classes=["app-setup-fold"],
     ) as fold:
         with gr.Row(equal_height=False):
+            # Left, what is typed: the form, then its problems.
             with gr.Column(scale=1, min_width=_COLUMN_MIN):
+                gr.Markdown("#### Settings")
 
                 @gr.render(
                     inputs=[draft, revision], triggers=[revision.change], **_RENDERS
@@ -690,17 +704,24 @@ def _section_block(
                             readonly=readonly,
                         )
 
-            with gr.Column(scale=1, min_width=_COLUMN_MIN):
-                summary_md = gr.Markdown()
                 config_md = gr.Markdown()
+
+            # Right, what the machine has for it, set apart by the panel's background.
+            with gr.Column(scale=1, min_width=_COLUMN_MIN, variant="panel"):
+                gr.Markdown("#### On this machine")
+                summary_md = gr.Markdown()
                 checked = gr.State(())
                 # The table: its rows drawn once, filled from each check (`checked`).
                 table = _draw_rows()
                 with gr.Row():
-                    check = gr.Button("Check", scale=0)
-                    install_all = gr.Button("Install all", scale=0)
-                    prepare_all = gr.Button("Prepare all", scale=0)
-                    probe = gr.Button("Test", scale=0)
+                    check = gr.Button("Check", size="sm", scale=0, min_width=100)
+                    install_all = gr.Button(
+                        "Install all", size="sm", scale=0, min_width=100
+                    )
+                    prepare_all = gr.Button(
+                        "Prepare all", size="sm", scale=0, min_width=100
+                    )
+                    probe = gr.Button("Test", size="sm", scale=0, min_width=100)
                 output = gr.Textbox(
                     label="Output",
                     lines=6,
@@ -881,6 +902,16 @@ def _install_output(
     """An Install all's output box while it runs, five times a second."""
     while not run.done.wait(0.2):
         yield _install_text(actions, run, extras, done=False)
+
+
+def _unfold(open: SectionOpen, opened: bool, status: Status) -> dict[str, Any]:
+    """Whether a used section's fold is opened, as a fold update: as the section's *open*
+    says when the page loads (*opened* still false), then left to the user."""
+    if opened:
+        return {}
+    if open == "needs":
+        return {"open": bool(status and status[1])}
+    return {"open": open == "always"}
 
 
 def _overview(
@@ -1139,8 +1170,8 @@ def setup_panel(model: AppModel) -> SetupPanel:
     """Draw the Setup panel of *model*'s app here: for an app with autostart, its launch
     choice, saved at once; then the config: the whole config's Check all, Install all,
     Prepare all and Test all with its summary line; one fold per section the config uses,
-    titled with its line (its modules, its status), open at page load when it needs
-    something: inside, its form beside its own checks — Check, Install all, Prepare all,
+    titled with its line (its modules, its status), open at page load as the section's
+    `open` says (by default, when it needs something): inside, its form beside its own checks — Check, Install all, Prepare all,
     Test — trying the draft, and a table of what it needs, a line per item with its own
     action; an optional section's Remove, or its "off" line with Add; and at the bottom
     Save, Revert and Reset for the whole config (Reset only for a source with a default),
@@ -1191,16 +1222,8 @@ def setup_panel(model: AppModel) -> SetupPanel:
     gr.Markdown(REQUIRED)
     unsaved_top = gr.Markdown() if editable else None
 
-    # The whole config's actions and its line, over the folds.
-    with gr.Row():
-        check_all = gr.Button("Check all", scale=0)
-        install_everything = gr.Button("Install all", scale=0)
-        prepare_everything = gr.Button("Prepare all", scale=0)
-        test_all = gr.Button("Test all", scale=0)
+    # The whole config's line, over the folds.
     overview_md = gr.Markdown()
-    overview_output = gr.Textbox(
-        label="Output", lines=6, max_lines=20, interactive=False, visible=False
-    )
 
     # The item rows' progress, on a timer of their own (sharing the lock line's stopped the
     # lock line updating in the browser), off until a line is acted on (`_follow_rows`).
@@ -1221,6 +1244,20 @@ def setup_panel(model: AppModel) -> SetupPanel:
         for section in model.app.sections
     ]
     _follow_rows(actions, sections, rows_timer)
+
+    # The whole config's actions, after the folds and just above Save: shown only while
+    # the config uses two sections or more (with one, they would repeat its own).
+    with gr.Column(
+        visible=len(model.used(initial)) > 1, elem_classes=["app-setup-all"]
+    ) as overview:
+        with gr.Row():
+            check_all = gr.Button("Check all", scale=0)
+            install_everything = gr.Button("Install all", scale=0)
+            prepare_everything = gr.Button("Prepare all", scale=0)
+            test_all = gr.Button("Test all", scale=0)
+        overview_output = gr.Textbox(
+            label="Output", lines=6, max_lines=20, interactive=False, visible=False
+        )
     _overview(
         model,
         actions,
@@ -1274,16 +1311,19 @@ def setup_panel(model: AppModel) -> SetupPanel:
         for section in sections:
             if section.name in used:
                 *reports, fold, status = section.reports(config)
-                # As the page loads, a section needing something is opened, the others
-                # folded; afterwards the user opens and closes them.
-                unfold = {} if opened else {"open": bool(status and status[1])}
+                unfold = _unfold(model.section(section.name).open, opened, status)
                 reports += [{**fold, "visible": True, **unfold}, status]
             else:
                 reports = ["", "", (), gr.update(visible=False), None]
             updates += [*reports, gr.update(value="", visible=False)]
             if section.off is not None:
                 updates.append(gr.update(visible=section.name in off))
-        return [*updates, gr.update(value="", visible=False), True]
+        return [
+            *updates,
+            gr.update(value="", visible=False),
+            gr.update(visible=len(used) > 1),
+            True,
+        ]
 
     # Each change of structure (the page loaded, a module switched, an optional object
     # turned on or off, an optional section added or removed, a choice from a list,
@@ -1304,6 +1344,7 @@ def setup_panel(model: AppModel) -> SetupPanel:
                 )
             ),
             overview_output,
+            overview,
             unfolded,
         ],
         show_progress="hidden",

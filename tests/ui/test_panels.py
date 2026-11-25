@@ -23,6 +23,7 @@ from app_setup.ui.panels import (
     DRAFT,
     LOCKED,
     READ_ONLY,
+    REQUIRED,
     UNSAVED_BOTTOM,
     UNSAVED_SESSION,
     UNSAVED_TOP,
@@ -1127,3 +1128,99 @@ def test_the_folds_add_lines_and_remove_buttons_are_drawn_once(tmp_path: Path) -
     for name in ("on_add", "on_remove", "on_summary", "on_redraw"):
         (fn,) = [f for f in page.fns.values() if f.fn and f.fn.__name__ == name]
         assert fn.rendered_in is None, name
+
+
+def test_the_whole_config_s_actions_show_with_two_sections_at_the_end(
+    tmp_path: Path,
+) -> None:
+    with gr.Blocks() as page:
+        setup_panel(_with_backup(tmp_path, SpeechLib(), SpeechLib()))
+    drawn = list(page.blocks.values())
+    redraw = _handler(page, "on_redraw")
+    overview = next(
+        b for b in drawn if "app-setup-all" in (getattr(b, "elem_classes", None) or [])
+    )
+    check_all = next(b for b in drawn if getattr(b, "value", None) == "Check all")
+    save = [b for b in drawn if getattr(b, "value", None) == "Save"][-1]
+    folds = [drawn.index(b) for b in drawn if isinstance(b, gr.Accordion)]
+
+    # One section used (the backup off): hidden, they would repeat its own. Two: shown.
+    assert overview.visible is False  # the saved config uses one
+    assert redraw(DEFAULTS, True)[-2]["visible"] is False
+    assert redraw({**DEFAULTS, "backup": BACKUP_DEFAULT}, True)[-2]["visible"] is True
+    # After the folds, just above Save; the whole config's line stays on top.
+    assert max(folds) < drawn.index(check_all) < drawn.index(save)
+    summary = (
+        drawn.index(_markdown(drawn, REQUIRED)) + 2
+    )  # the unsaved line, the summary
+    assert summary < min(folds)
+
+
+def test_a_fold_has_its_settings_beside_what_the_machine_has(tmp_path: Path) -> None:
+    with gr.Blocks() as page:
+        setup_panel(_model(tmp_path))
+    drawn = list(page.blocks.values())
+    settings = drawn.index(_markdown(drawn, "#### Settings"))
+    machine = _markdown(drawn, "#### On this machine")
+
+    # The right column set apart as a panel; the section's own buttons small, on a row.
+    column = next(
+        b
+        for b in drawn
+        if isinstance(b, gr.Column) and machine._id in [c._id for c in b.children]
+    )
+    assert column.variant == "panel"
+    own = [b for b in drawn if isinstance(b, gr.Button) and b.value == "Check"]
+    assert [b.size for b in own] == ["sm"]
+    # The config's problems (Check's first output) under the form, in the left column.
+    (check,) = [f for f in page.fns.values() if f.fn and f.fn.__name__ == "on_check"]
+    problems = drawn.index(check.outputs[0])
+    assert settings < problems < drawn.index(machine)
+    assert _handler(page, "on_check")(DEFAULTS)[0] == "✅ **The config is valid.**"
+
+
+def test_each_section_s_open_says_how_its_fold_starts(tmp_path: Path) -> None:
+    def at_load(speech_open: Any, backup_open: Any) -> tuple[Any, Any]:
+        speech, backup = SpeechLib(), SpeechLib()  # the speech needs its lexicon
+        backup.lexicon, backup.downloaded = True, {"Bo"}  # the backup ready
+        model = _model(
+            tmp_path / f"{speech_open}-{backup_open}",
+            sections=(
+                Section("speech", speech, open=speech_open),
+                Section("backup", backup, optional=True, open=backup_open),
+            ),
+        )
+        with gr.Blocks() as page:
+            setup_panel(model)
+        redraw = _handler(page, "on_redraw")
+        loaded = redraw({**DEFAULTS, "backup": BACKUP_DEFAULT}, False)
+        later = redraw({**DEFAULTS, "backup": BACKUP_DEFAULT}, True)
+        # Afterwards, the user's: a redraw (a module switched, a check) moves none.
+        assert "open" not in later[SPEECH_FOLD] and "open" not in later[BACKUP_FOLD]
+        return loaded[SPEECH_FOLD]["open"], loaded[BACKUP_FOLD]["open"]
+
+    # "needs", the default: open when the section needs something.
+    assert Section("s", SpeechLib()).open == "needs"
+    assert at_load("needs", "needs") == (True, False)
+    # Each section its own: "always" open even ready, "folded" even needing something.
+    assert at_load("folded", "always") == (False, True)
+    assert at_load("needs", "always") == (True, True)
+
+
+def test_a_lone_section_is_open_only_when_it_says_so(tmp_path: Path) -> None:
+    def at_load(own: Any) -> Any:
+        lib = SpeechLib()
+        lib.lexicon, lib.downloaded = True, {"Ada"}  # ready
+        model = _model(tmp_path / own, sections=(Section("speech", lib, open=own),))
+        with gr.Blocks() as page:
+            setup_panel(model)
+        return _handler(page, "on_redraw")(DEFAULTS, False)[SPEECH_FOLD]["open"]
+
+    # No rule of its own for one section: ready, it is folded unless it asks.
+    assert at_load("needs") is False
+    assert at_load("always") is True
+
+
+def test_a_section_s_open_must_be_one_of_its_values() -> None:
+    with pytest.raises(ValueError, match="open is one of needs, always, folded, not"):
+        Section("speech", SpeechLib(), open="sometimes")  # type: ignore[arg-type]

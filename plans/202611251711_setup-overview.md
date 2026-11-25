@@ -6,7 +6,7 @@ Implements [specs/setup-overview.md](../specs/setup-overview.md) (still **Draft*
 
 ## Scope
 
-- `src/app_setup/app.py` — `Section(optional, default)`; a bare app's section cannot be optional; `AppModel.used` leaving an absent optional section out; `optional_off`, `add_section` (with the document removed earlier, else the default), `remove_section`, `summary`, `section_title`; `summary_line`, the whole config's wording (gradio-free, so the model says it too)
+- `src/app_setup/app.py` — `Section(optional, default, open)`; a bare app's section cannot be optional; `AppModel.used` leaving an absent optional section out; `optional_off`, `add_section` (with the document removed earlier, else the default), `remove_section`, `summary`, `section_title`; `summary_line`, the whole config's wording (gradio-free, so the model says it too)
 - `src/app_setup/form.py` — `selected_modules(schema, document)`
 - `src/app_setup/ui/report.py` — `section_line`, `section_status`, `config_summary`
 - `src/app_setup/ui/form.py` — `section_title` delegating to the model
@@ -26,6 +26,8 @@ Implements [specs/setup-overview.md](../specs/setup-overview.md) (still **Draft*
 4. The table in half a fold's width: the action column narrowed (200 px), the text cells shrinking and wrapping, a row's button at its own height.
    The folds and the item lines carry a class (`app-setup-fold`, `app-setup-item`): the fold's two-column row holds the whole table, so the browser tests' `.row` filters matched it, not one line (a flake found this way).
 5. Tests, then the existing ones adapted to the checks' two new outputs.
+6. After trying it (a one-section app): the whole config's actions (and their output box) move to just above Save, shown only while the config uses two sections or more (visibility in `on_redraw`'s outputs); the line stays on top. A fold's two columns are titled: **Settings** (the form, then the config's problems) and **On this machine** (a `variant="panel"` column: the status line, the table, the section's own buttons small on one row, its output). The table's **Action** title is aligned over the rows' buttons (gradio pads an HTML block, a button not).
+7. Each section says how its fold starts: `Section(open="needs" | "always" | "folded")`, "needs" by default; no rule of the panel's own, a single section included.
 
 ## Verification
 

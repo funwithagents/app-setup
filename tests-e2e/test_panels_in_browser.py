@@ -600,9 +600,32 @@ def test_check_all_turns_a_fold_s_line_ready(
     # Prepared elsewhere (a terminal, another app): Check all sees it.
     two_sections.speech.lexicon = True
     two_sections.speech.downloaded = {"Ada"}
-    page.get_by_role("button", name="Check all").click()
+    # The whole config's actions, under the folds, just above Save.
+    check_all = page.get_by_role("button", name="Check all")
+    save = page.get_by_role("button", name="Save", exact=True).last
+    assert check_all.bounding_box()["y"] < save.bounding_box()["y"]  # type: ignore[index]
+    folds = page.locator(".app-setup-fold")
+    last_fold = folds.nth(folds.count() - 1).bounding_box()
+    assert last_fold["y"] < check_all.bounding_box()["y"]  # type: ignore[index]
+    check_all.click()
 
     page.get_by_text("Speech — Local voice · ✅ Ready").wait_for()
     page.get_by_text("✅ Ready to run", exact=True).wait_for()
     # A check never folds a section: it stays open, ready.
     sync_api.expect(_toggle(_fold(page, "Speech —"))).to_have_class(OPEN)
+
+
+def test_one_section_is_drawn_without_the_whole_config_s_actions(
+    served: Served, browser: object
+) -> None:
+    page = _open_setup(served, browser)
+    page.get_by_text("Speech — Local voice · ❌ 1 required item missing").wait_for()
+
+    # Needing its lexicon: open, its two titled columns.
+    sync_api.expect(_toggle(_fold(page, "Speech —"))).to_have_class(OPEN)
+    _textbox(page, "speed").wait_for()
+    page.get_by_role("heading", name="Settings").wait_for()
+    page.get_by_role("heading", name="On this machine").wait_for()
+    # Its own Check, not the whole config's: they would repeat it.
+    assert page.get_by_role("button", name="Check", exact=True).is_visible()
+    assert not page.get_by_role("button", name="Check all").is_visible()
