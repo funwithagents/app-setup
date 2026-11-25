@@ -1,3 +1,4 @@
+import json
 import os
 import threading
 import time
@@ -12,6 +13,7 @@ from gradio.components import Component
 
 from app_setup import app as app_module
 from app_setup.app import App, AppModel, Section
+from app_setup.config_file import ConfigFile
 from app_setup.extras import RequirementStatus
 from app_setup.folder import ConfigFolder
 from app_setup.secrets import SecretStore
@@ -20,6 +22,7 @@ from app_setup.ui.form import render_section, section_title
 from app_setup.ui.panels import (
     DRAFT,
     LOCKED,
+    READ_ONLY,
     UNSAVED_BOTTOM,
     UNSAVED_SESSION,
     UNSAVED_TOP,
@@ -803,3 +806,91 @@ def test_a_key_saved_on_its_line_reaches_the_store_and_turns_ready(
     assert model.secrets.revision != seen  # every tab checks again
     key = next(i for i in items if i.variable == "CLOUD_VOICE_KEY")
     assert key.status == "ready"
+
+
+def _running_file(
+    tmp_path: Path, environ: dict[str, str] | None = None, **app: Any
+) -> tuple[AppModel, Path]:
+    """An app running a file as it is: a bare app's file, its .env next to it."""
+    path = tmp_path / "voice.json"
+    path.write_text(json.dumps(DEFAULTS["speech"]))
+    application = App(
+        name="talk",
+        host="talk-app",
+        sections=(Section("speech", app.pop("lib", SpeechLib())),),
+        default_config=DEFAULTS["speech"],
+        bare=True,
+        **app,
+    )
+    store = SecretStore(tmp_path / ".env", {} if environ is None else environ)
+    return AppModel(application, ConfigFile(path), store), path
+
+
+def test_a_file_run_as_it_is_gets_a_read_only_setup_panel(tmp_path: Path) -> None:
+    model, path = _running_file(tmp_path, autostart=True)
+    with gr.Blocks() as page:
+        setup_panel(model)
+    drawn = list(page.blocks.values())
+    buttons = [b.value for b in drawn if isinstance(b, gr.Button)]
+    markdown = [b.value for b in drawn if isinstance(b, gr.Markdown)]
+
+    # The file named, and what to do to change it.
+    assert READ_ONLY.format(path=path) in markdown
+    assert f"Running `{path}` as it is." in READ_ONLY.format(path=path)
+    # Nothing to save: no Save, Revert, Reset, unsaved line or launch checkbox.
+    assert "Revert to saved" not in buttons and "Reset to defaults" not in buttons
+    assert not [
+        b for b in drawn if isinstance(b, gr.Button) and b.variant == "primary"
+    ]  # the config's Save; each row's key keeps its own
+    assert DRAFT not in markdown
+    assert not [b for b in drawn if isinstance(b, gr.Checkbox)]
+    for name in ("on_save", "on_revert", "on_reset", "on_draft", "on_autostart"):
+        assert _handlers(page, name) == [], name
+    # The checks and their actions, as for a folder.
+    for name in ("Check", "Install all", "Prepare all", "Test"):
+        assert name in buttons
+    assert _handlers(page, "on_button") and _handlers(page, "on_save_key")
+    _, summary, items = _handler(page, "on_check")(model.saved_config())
+    assert summary and [i.id for i in items][:1] == ["extra:speech-lib[local-voice]"]
+    # The tick has no lock nor unsaved line to keep: the secrets' revision, the checks,
+    # the rows' timer, what it showed.
+    tick = _handler(page, "on_tick")(model.saved_config(), 1, None, None)
+    assert tick[0] == model.secrets.revision and len(tick) == 1 + 3 + 2
+
+
+def test_the_read_only_form_shows_every_field_and_edits_none(tmp_path: Path) -> None:
+    model, _ = _running_file(tmp_path)
+    config = {"speech": {"module": {"type": "local-voice", "voice": "Bo"}, "gate": {}}}
+
+    with gr.Blocks() as form:
+        draft = gr.State(config)
+        revision = gr.Number(0, precision=0, visible=False)
+        render_section(model, "speech", config, draft, revision, readonly=True)
+    drawn = [b for b in form.blocks.values() if isinstance(b, Component)]
+    fields = [c for c in drawn if getattr(c, "label", None)]
+    labels = _labels(fields)
+
+    # Every field shown, the values that run readable.
+    assert {"Voice", "voice", "speed", "timeout", "Configure gate", "level"} <= set(
+        labels
+    )
+    assert next(c for c in fields if c.label == "voice").value == "Bo"
+    # None editable, no module switch, no list button, no listener at all.
+    assert all(c.interactive is False for c in fields)
+    assert not [b for b in drawn if isinstance(b, gr.Button)]
+    assert not form.fns
+
+
+def test_a_key_saved_from_a_line_reaches_the_file_s_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model, _ = _running_file(tmp_path, environ=_environ(monkeypatch))
+    cloud = {"speech": {"module": {"type": "cloud-voice", "voice_id": "v"}}}
+    with gr.Blocks() as page:
+        setup_panel(model)
+    shown = tuple(model.check_setup(cloud))
+    index = next(i for i, item in enumerate(shown) if item.variable)
+
+    _handlers(page, "on_save_key")[0]("s3cret", shown, cloud, index=index)
+
+    assert (tmp_path / ".env").read_text() == 'CLOUD_VOICE_KEY="s3cret"\n'

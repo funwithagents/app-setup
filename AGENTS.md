@@ -24,15 +24,18 @@ Where things live. This is a coarse, module-level map — for the full file inve
 
 | Module | Role | Spec |
 |---|---|---|
-| [app.py](src/app_setup/app.py) | `App` and `Section` (what an app declares), `AppModel` (what its panels do, no gradio): check, install, prepare, probe, secrets, blockers, the config locked while the app's session runs | [app.md](specs/app.md) |
+| [app.py](src/app_setup/app.py) | `App` and `Section` (what an app declares; `bare`: a one-section app whose config is its library's own document), `AppModel` (what its panels do, no gradio, over a folder or a file): check, install, prepare, probe, secrets, blockers, the config locked while the app's session runs | [app.md](specs/app.md), [config-file.md](specs/config-file.md) |
 | [folder.py](src/app_setup/folder.py) | `ConfigFolder`: the current config and the `.env` path; the default config on first launch | [config-folder.md](specs/config-folder.md) |
+| [config_file.py](src/app_setup/config_file.py) | `ConfigFile`: a single config file as the config's source, run as it is or edited by a config app; the `.env` next to it; `ConfigFileError` | [config-file.md](specs/config-file.md) |
+| [launch.py](src/app_setup/launch.py) | The command line every app shares: `add_config_arguments` (`--folder` / `--config`, `--env`) and `open_source`; a config app's `add_config_app_arguments` and `open_config_app` | [config-file.md](specs/config-file.md) |
 | [secrets.py](src/app_setup/secrets.py) | `SecretStore`: the `.env` dialect, loading it under the shell's variables, writing a key, each variable's source | [secrets.md](specs/secrets.md) |
 | [form.py](src/app_setup/form.py) | The form as data: a schema and a document to items, and each edit as a pure function (coerce, switch module, toggle) | [ui.md](specs/ui.md) |
 | [ui/form.py](src/app_setup/ui/form.py) | The form drawn with gradio, inside the Setup panel's `gr.render` | [ui.md](specs/ui.md) |
-| [ui/panels.py](src/app_setup/ui/panels.py) | `setup_panel` and `secrets_panel`: each drawn where an app calls it, with its own state, events and page-load step | [ui.md](specs/ui.md) |
+| [ui/panels.py](src/app_setup/ui/panels.py) | `setup_panel` and `secrets_panel`: each drawn where an app calls it, with its own state, events and page-load step; the Setup panel read-only for an app running a file | [ui.md](specs/ui.md) |
+| [ui/config_page.py](src/app_setup/ui/config_page.py) | `config_page`: a config app's page, Setup and Secrets, no session | [config-file.md](specs/config-file.md) |
 | [ui/report.py](src/app_setup/ui/report.py) | The reports as Markdown: problems, setup table, secrets | [ui.md](specs/ui.md) |
 | [extras.py](src/app_setup/extras.py) | Requirements against the installed environment, read from package metadata without importing anything: `requirement_status` (installed, missing, unavailable on this platform), `host_extras` (which extra of the host carries a library's requirement), `find_installer` / `Installer` (add extras from the host's lock with uv) | [extras.md](specs/extras.md) |
-| [autostart.py](src/app_setup/autostart.py) | Whether an app starts its session at launch: `add_start_arguments` (`--start` / `--no-start`) and `starts_at_launch` (the flag, else the folder's `launch.json`, else `App.autostart`) | [autostart.md](specs/autostart.md) |
+| [autostart.py](src/app_setup/autostart.py) | Whether an app starts its session at launch: `add_start_arguments` (`--start` / `--no-start`) and `starts_at_launch` (the flag; from a file, yes; else the folder's `launch.json`, else `App.autostart`) | [autostart.md](specs/autostart.md) |
 | [contract.py](src/app_setup/contract.py) | The module contract from the consuming side: the `SetupContract` protocol, `parse_description` (a `describe()` result into the frozen objects a form is drawn from, refusing what is outside the spec), `check_contract` (the conformance check a library runs in its tests) | [module-contract.md](specs/module-contract.md) |
 
 **Keep this map current:** when you add, rename, or remove a top-level `src/app_setup/` module or a root directory, update the map in the same change — same discipline as keeping spec/plan statuses honest (below). A test (`tests/test_project_map.py`) enforces that every `src/app_setup/*.py` module appears here and vice-versa — and that the spec frontmatter (see below) stays honest too.

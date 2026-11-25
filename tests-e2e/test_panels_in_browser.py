@@ -33,10 +33,11 @@ from fakes import SpeechLib  # pyright: ignore[reportMissingImports]
 
 from app_setup import app as app_module
 from app_setup.app import App, AppModel, Section
+from app_setup.config_file import ConfigFile
 from app_setup.extras import RequirementStatus
 from app_setup.folder import ConfigFolder
 from app_setup.secrets import SecretStore
-from app_setup.ui import secrets_panel, setup_panel
+from app_setup.ui import config_page, secrets_panel, setup_panel
 
 DEFAULTS = {"speech": {"module": {"type": "local-voice"}}}
 
@@ -82,14 +83,12 @@ class Served:
         self.installer = Installer(lib)
 
 
-@pytest.fixture
-def served(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Served]:
-    """An app's own page: its tab first, then the two panels in tabs of its own. The
-    process environment is a copy, without the fake library's key: the store writes the
-    keys there and the library reads them from there."""
+def _fake_host(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    """The process environment, a copy without the fake library's key (the store writes
+    the keys there and the library reads them from there); the host's extras:
+    `speech-local` and `speech-cloud` carry the voices' extras."""
     environ = {k: v for k, v in os.environ.items() if k != "CLOUD_VOICE_KEY"}
     monkeypatch.setattr(os, "environ", environ)
-    # The host's extras: `speech-local` and `speech-cloud` carry the voices' extras.
     monkeypatch.setattr(
         app_module,
         "host_extras",
@@ -103,6 +102,13 @@ def served(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Served]:
         "requirement_status",
         lambda requirement: RequirementStatus(requirement, "missing"),
     )
+    return environ
+
+
+@pytest.fixture
+def served(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Served]:
+    """An app's own page: its tab first, then the two panels in tabs of its own."""
+    environ = _fake_host(monkeypatch)
     lib = SpeechLib()
     app = App(
         name="browser",
@@ -348,3 +354,122 @@ def test_a_key_is_saved_from_its_line(served: Served, browser: object) -> None:
     page.get_by_role("row", name="CLOUD_VOICE_KEY").filter(
         has_text="the folder's .env"
     ).wait_for()
+
+
+class ServedFile:
+    """A page over a config file: an app running it as it is, or a config app."""
+
+    def __init__(self, url: str, path: Path, lib: SpeechLib) -> None:
+        self.url, self.path, self.lib = url, path, lib
+        self.installer = Installer(lib)
+
+
+def _serve_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, writable: bool
+) -> Iterator[ServedFile]:
+    """A bare app's file (its library's document alone), served: by a config app when
+    *writable*, else by an app running it as it is (its Setup panel in a tab not first)."""
+    _fake_host(monkeypatch)
+    lib = SpeechLib()
+    path = tmp_path / "configs" / "voice.json"
+    path.parent.mkdir()
+    path.write_text(json.dumps(DEFAULTS["speech"], indent=2) + "\n")
+    app = App(
+        name="voice",
+        host="app-setup",
+        sections=(Section("speech", lib),),
+        default_config=DEFAULTS["speech"],
+        bare=True,
+    )
+    port = _free_port()
+    served = ServedFile(f"http://127.0.0.1:{port}/", path, lib)
+    monkeypatch.setattr(app_module, "find_installer", lambda host: served.installer)
+    model = AppModel(app, ConfigFile(path, writable=writable))
+    if writable:
+        page = config_page(model)
+    else:
+        with gr.Blocks() as page:
+            with gr.Tab("Talk"):
+                gr.Markdown("The app's own session, running the file.")
+            with gr.Tab("Setup"):
+                setup = setup_panel(model)
+            with gr.Tab("Keys"):
+                secrets_panel(model, setup.draft)
+    page.launch(server_name="127.0.0.1", server_port=port, prevent_thread_lock=True)
+    try:
+        yield served
+    finally:
+        page.close()
+
+
+@pytest.fixture
+def config_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[ServedFile]:
+    yield from _serve_file(tmp_path, monkeypatch, writable=True)
+
+
+@pytest.fixture
+def running_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[ServedFile]:
+    yield from _serve_file(tmp_path, monkeypatch, writable=False)
+
+
+def test_a_config_app_edits_a_file_and_saves_it(
+    config_app: ServedFile, browser: object
+) -> None:
+    page = browser.new_page()  # type: ignore[attr-defined]
+    page.goto(config_app.url)
+    _textbox(page, "speed").wait_for()  # the Setup tab, first: the form is drawn
+    page.get_by_text("Save writes it to").wait_for()
+    assert page.get_by_role("button", name="Reset to defaults").count() == 0
+
+    page.get_by_label("Voice", exact=True).click()
+    page.get_by_role("option", name="Cloud voice (hosted)").click()
+    voice_id = _textbox(page, "voice_id *")
+    voice_id.wait_for()
+    voice_id.fill("v-42")
+    voice_id.press("Tab")
+    page.get_by_role("button", name="Save", exact=True).last.click()
+    page.get_by_text("Saved.").wait_for()
+
+    # The library's own document, no key around it.
+    assert json.loads(config_app.path.read_text()) == {
+        "module": {"type": "cloud-voice", "voice_id": "v-42"}
+    }
+
+    # Edited by hand, then Revert: the file read again.
+    config_app.path.write_text(
+        json.dumps({"module": {"type": "cloud-voice", "voice_id": "by-hand"}})
+    )
+    page.get_by_role("button", name="Revert to saved").click()
+    page.get_by_text("Reverted to the saved config.").wait_for()
+    sync_api.expect(_textbox(page, "voice_id *")).to_have_value("by-hand")
+
+
+def test_an_app_running_a_file_shows_the_form_read_only_and_installs_from_a_line(
+    running_file: ServedFile, browser: object
+) -> None:
+    running_file.lib.installed["local-voice"] = False
+    before = running_file.path.read_bytes()
+    page = browser.new_page()  # type: ignore[attr-defined]
+    page.goto(running_file.url)
+    page.get_by_role("tab", name="Setup").click()
+
+    page.get_by_text("as it is. To change it, edit the file").wait_for()
+    speed = _textbox(page, "speed")
+    speed.wait_for()
+    assert speed.is_disabled()  # shown, not editable
+    assert page.get_by_label("Voice", exact=True).is_disabled()
+    for name in ("Revert to saved", "Reset to defaults", "Choose from the voices list"):
+        assert page.get_by_role("button", name=name).count() == 0
+    assert page.get_by_text("Unsaved changes").count() == 0
+
+    line = page.locator(".row", has_text="local-voice extra").last
+    line.get_by_text("Missing – required").wait_for()
+    line.get_by_role("button", name="Install").click()
+    line.get_by_text("Installing…").wait_for()
+    running_file.installer.gate.set()
+    line.get_by_text("Ready").wait_for()  # the section checked again
+
+    assert running_file.installer.runs == [["speech-local"]]
+    assert running_file.path.read_bytes() == before  # never written

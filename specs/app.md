@@ -36,6 +36,7 @@ class App:
     default_config: Mapping[str, Any]
     title: str | None = None
     autostart: bool | None = None
+    bare: bool = False
 ```
 
 - **`name`** is the default name of the app's folder ([config-folder.md](config-folder.md)) and, unless `title` is given, its title.
@@ -44,16 +45,17 @@ class App:
 - **`contract`** is the contract object, or a function returning it. The function is for a library the host installs only with one of its own extras: while it raises `ImportError`, the section is shown as needing **`host_extra`**, which the page can install; it is tried again after an install.
 - **`when`**, given the whole config, says whether the section is used (a section for one embodiment of an app). A section not used is neither drawn nor checked, and the app does not run it; its document stays in the config, so switching back loses nothing.
 - **`default_config`** is the first config of a new folder, and what "Reset" goes back to.
+- **`bare`** declares a one-section app whose config **is** its section's document, with no key around it (a library's demo, [config-file.md](config-file.md)): its folder's `config.json`, a `--config` file, a config app's file and its `default_config` are that document. The model wraps what it reads into `{section: document}` and unwraps what it saves, so the panels and every method below see the usual shape. `bare=True` with more than one section raises `ValueError`.
 - **`autostart`** says the app starts its session at launch by default (`None`: it has no autostart); the user's choice is kept in the folder's `launch.json` ([autostart.md](autostart.md)). `AppModel.autostart()` and `set_autostart(on)` read and write it.
 
 ## The model
 
-`AppModel(app, folder, secrets=None, locked=None)` is what the panels do, shared by every browser tab. Most methods take the config being edited (a Setup panel's draft).
+`AppModel(app, source, secrets=None, locked=None)` is what the panels do, shared by every browser tab. `source` is where the config comes from: a `ConfigFolder` ([config-folder.md](config-folder.md)) or a `ConfigFile` ([config-file.md](config-file.md)); `model.source` is it, and `model.editable` is `source.writable` (false for an app running a file as it is: the Setup panel is then read-only). Most methods take the config being edited (a Setup panel's draft).
 
 Building it makes the app ready to set up, so an app cannot forget a step or take them out of order:
 
-1. **The folder**: `folder.ensure()`, which creates it and writes the default config when there is none ([config-folder.md](config-folder.md)).
-2. **The secrets**: without `secrets`, it opens the folder's `.env` over `os.environ` and loads it, so the keys saved in an earlier run reach the libraries ([secrets.md](secrets.md)). An app passing its own store loads it itself.
+1. **The source**: `source.ensure()`, which creates a folder and writes the default config when there is none ([config-folder.md](config-folder.md)); a file is never created.
+2. **The secrets**: without `secrets`, it opens the source's `.env` (`source.env_path`) over `os.environ` and loads it, so the keys saved in an earlier run reach the libraries ([secrets.md](secrets.md)). An app passing its own store loads it itself.
 
 `locked` is the app's: a function telling whether the saved config is in use (a session running). While it returns true, `save` and `reset` raise `RuntimeError`, and the Setup panel disables them. Without it, the config is never locked.
 
@@ -61,15 +63,18 @@ An app's whole setup:
 
 ```python
 model = AppModel(APP, ConfigFolder(default_folder(APP.name), APP.default_config), locked=session.running)
+# or the source its command line names (--folder DIR | --config FILE, --env PATH):
+model = AppModel(APP, open_source(options, APP), locked=session.running)
 ```
 
 | Method | What it does |
 |---|---|
 | `used(config, sections=None)` | The sections the config uses, in declaration order (only those of `sections`, when given) |
-| `saved_config()`, `save(config)`, `reset()` | Read, save, or reset to the default the config in the folder. `save` and `reset` raise `RuntimeError` while the config is locked |
+| `saved_config()`, `save(config)`, `reset()` | Read, save, or reset to the default the config of the source (a bare app's wrapped and unwrapped). `save` and `reset` raise `RuntimeError` while the config is locked; `save` also for a source that is not writable, `reset` for one without a default (a file) |
 | `unsaved(draft)` | Whether a draft differs from the saved config: the whole config compared, not only the sections it uses (Save writes the whole draft, a section not used keeps its document, and `when` reads keys outside the sections) |
 | `locked()` | Whether the app is using the saved config |
-| `path` | The folder: where a section's relative paths resolve |
+| `path` | `source.base_dir`: the folder, or the file's directory; where a section's relative paths resolve |
+| `editable` | Whether the config can be saved: `source.writable` |
 | `check_config(config, sections=None)` | Every section's `check_config`, each problem as `Problem(section, path, message)`, the path a JSON Pointer into the app's config (`/speech/module/voice_id`). A used section absent from the config is a problem at `/<section>` |
 | `check_setup(config, sections=None)` | Every section's `check_setup`, each item as a `SetupItem`; a section whose document has problems is not asked, since the contract asks it only about a config `check_config` accepts: its extras come instead from its `required_extras` (which takes an incomplete config) and the installed packages' metadata, so an extra can be installed while the config is still being fixed — a field filled from a list the extra provides would otherwise never be filled; and one item per variable its document names for a key (the schema's `x-secret-env` fields, their defaults included), ready when set, so a key is asked for alongside the field still missing, not after it. An extra's item is told which host extras install it (`host_extras`, from [extras.md](extras.md)); an extra unavailable on this platform says so and has none. A section whose library does not import is one missing item, installable by its `host_extra` |
 | `missing_extras(config, sections=None)` | The host extras that install what is missing: the first carrier of each installable item |
@@ -102,6 +107,7 @@ The app's own Start uses the model this way: read `saved_config()`, refuse with 
 - the install delegated to the installer, and refused without one;
 - the secrets named and their sources; a key item told its variable, the other items none;
 - building the model writes the default config and loads the `.env` under the shell's variables;
+- a bare app's folder holding its library's document, written from its default, read wrapped, saved and reset unwrapped; `bare=True` with two sections refused;
 - the blockers of a config, then none once ready;
 - the config refused while the app locks it, and never locked without a lock;
 - a draft unsaved until it is saved, a change to a section not used included.

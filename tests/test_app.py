@@ -565,3 +565,36 @@ def test_the_library_is_told_the_app_s_folder_for_relative_paths(
         "options": str(tmp_path),
         "probe": str(tmp_path),
     }
+
+
+def test_a_bare_app_s_folder_holds_its_library_s_document(
+    tmp_path: Path, lib: SpeechLib
+) -> None:
+    document = {"module": {"type": "local-voice"}}
+    app = App("talk", "talk-app", (Section("speech", lib),), document, bare=True)
+    folder = ConfigFolder(tmp_path, app.default_config)
+    model = AppModel(app, folder, SecretStore(folder.env_path, {}))
+
+    # Written from its default as the document alone, read wrapped for the panels.
+    assert json.loads(folder.config_path.read_text()) == document
+    assert model.saved_config() == {"speech": document}
+    assert model.blockers(model.saved_config()) == model.blockers(DEFAULTS)
+
+    cloud = {"speech": {"module": {"type": "cloud-voice", "voice_id": "v"}}}
+    model.save(cloud)
+    assert json.loads(folder.config_path.read_text()) == cloud["speech"]
+    assert not model.unsaved(cloud)
+
+    assert model.reset() == {"speech": document}
+    assert json.loads(folder.config_path.read_text()) == document
+
+
+def test_a_bare_app_has_exactly_one_section(lib: SpeechLib) -> None:
+    with pytest.raises(ValueError, match="exactly one section"):
+        App(
+            "talk",
+            "talk-app",
+            (Section("speech", lib), Section("backup", lib)),
+            {},
+            bare=True,
+        )

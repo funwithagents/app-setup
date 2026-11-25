@@ -8,6 +8,7 @@ from fakes import SpeechLib
 
 from app_setup.app import App, AppModel, Section
 from app_setup.autostart import add_start_arguments, starts_at_launch
+from app_setup.config_file import ConfigFile
 from app_setup.folder import ConfigFolder
 from app_setup.secrets import SecretStore
 
@@ -31,7 +32,9 @@ def test_the_app_s_default_holds_until_the_user_chooses(tmp_path: Path) -> None:
     off = _model(tmp_path / "off", autostart=False)
 
     assert (on.autostart(), off.autostart()) == (True, False)
-    assert not on.folder.launch_path.exists()  # nothing written until a choice
+    assert not (
+        tmp_path / "on" / "launch.json"
+    ).exists()  # nothing written until a choice
 
 
 def test_the_choice_is_kept_in_launch_json_never_in_the_config(tmp_path: Path) -> None:
@@ -40,7 +43,7 @@ def test_the_choice_is_kept_in_launch_json_never_in_the_config(tmp_path: Path) -
     model.set_autostart(False)
 
     assert model.autostart() is False
-    assert json.loads(model.folder.launch_path.read_text()) == {"autostart": False}
+    assert json.loads((tmp_path / "launch.json").read_text()) == {"autostart": False}
     # The config is the app's own sections only, saved or used.
     assert model.saved_config() == DEFAULTS
     assert model.used_config(model.saved_config()) == DEFAULTS
@@ -99,3 +102,26 @@ def test_the_start_arguments(argv: list[str], start: Any) -> None:
     add_start_arguments(parser)
 
     assert parser.parse_args(argv).start is start
+
+
+@pytest.mark.parametrize("autostart", [True, False, None])
+@pytest.mark.parametrize(
+    ("flag", "starts"), [(None, True), (True, True), (False, False)]
+)
+def test_from_a_file_the_session_starts_unless_no_start(
+    tmp_path: Path, autostart: bool | None, flag: bool | None, starts: bool
+) -> None:
+    path = tmp_path / "talk.json"
+    path.write_text(json.dumps(DEFAULTS))
+    # A launch.json nearby, saying no: a file has no launch settings, it is not read.
+    (tmp_path / "launch.json").write_text('{"autostart": false}')
+    app = App(
+        name="talk",
+        host="talk-app",
+        sections=(Section("speech", SpeechLib()),),
+        default_config=DEFAULTS,
+        autostart=autostart,
+    )
+    model = AppModel(app, ConfigFile(path), SecretStore(tmp_path / ".env", {}))
+
+    assert starts_at_launch(model, flag) is starts

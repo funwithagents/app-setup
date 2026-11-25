@@ -18,8 +18,10 @@ Libraries read their keys from the environment, through variable names their con
 | Source | When |
 |---|---|
 | `shell` | The variable was set, non-empty, in the environment the app was launched from. It always wins |
-| `file` | The folder's `.env` holds it; the app put it into the process environment |
+| `file` | The source's `.env` holds it; the app put it into the process environment |
 | `missing` | Neither |
+
+**Which `.env`:** the one next to the config — `DIR/.env` for a folder, the `.env` in a config file's directory for a file — unless the app is given another (`--env PATH`, [config-file.md](config-file.md)): the source's `env_path`. One `.env` serves every config of a directory.
 
 `SecretStore(env_path, environ=os.environ)` records, when it is created, which variables the shell set. `load()` then copies the file's variables into the environment, except the shell's, and takes out those an earlier load put there that the file no longer holds. The `AppModel` loads it when it is built ([app.md](app.md)), and the store keeps the environment in step with each change, before any check or session, so the libraries' own `check_setup` and the Secrets panel see the same environment. A library never reads the `.env` itself.
 
