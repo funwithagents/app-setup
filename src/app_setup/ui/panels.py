@@ -1438,12 +1438,18 @@ def secrets_panel(model: AppModel, config: gr.State | None = None) -> None:
         }
         return env_file_rows(model.secrets.variables(model.secrets.file_names()), named)
 
+    # The rows the list was last drawn with, in this browser tab: set by every event that
+    # draws it again, so a change of the config draws it again only when its rows change.
+    drawn = gr.State(None)
+
+    # Drawn again on its hidden number only, never on the config's change: the config is a
+    # `gr.State`, whose change gradio fires twice as the page loads in a tab other than the
+    # first, which drew the list twice, a click on the first drawing (a row's Remove)
+    # reaching a listener the second had dropped (found by the browser tests on CI, a
+    # `KeyError` on the Remove's event).
     @gr.render(
         inputs=[env_revision, *inputs],
-        triggers=[
-            env_revision.change,
-            *([config.change] if config is not None else []),
-        ],
+        triggers=[env_revision.change],
         **_RENDERS,
     )
     def env_file(revision: int, *values: Config) -> None:
@@ -1459,12 +1465,17 @@ def secrets_panel(model: AppModel, config: gr.State | None = None) -> None:
                 rev: int, *values: Config, name: str = name
             ) -> tuple[Any, ...]:
                 model.secrets.remove(name)
-                return f"`{name}` removed from the .env.", report(*values), rev + 1
+                return (
+                    f"`{name}` removed from the .env.",
+                    report(*values),
+                    rev + 1,
+                    file_rows(values),
+                )
 
             remove.click(
                 on_remove,
                 inputs=[env_revision, *inputs],
-                outputs=[secret_notice, secrets_md, env_revision],
+                outputs=[secret_notice, secrets_md, env_revision, drawn],
             )
 
     # The `SecretStore.revision` the key table shows, in this browser tab: noted with the
@@ -1474,23 +1485,36 @@ def secrets_panel(model: AppModel, config: gr.State | None = None) -> None:
     # a tab not shown yet only starts when the tab is first opened, maybe after the save.
     seen = gr.State(None)
 
-    def on_load(*values: Config) -> tuple[str, int, int]:
-        return report(*values), next(_loads), model.secrets.revision
+    def on_load(*values: Config) -> tuple[Any, ...]:
+        return report(*values), next(_loads), model.secrets.revision, file_rows(values)
 
     # On page load.
     gr.on(
         None,
         on_load,
         inputs=inputs,
-        outputs=[secrets_md, env_revision, seen],
+        outputs=[secrets_md, env_revision, seen, drawn],
         show_progress="hidden",
     )
 
     # The key table follows the config it reads: a module chosen in the Setup panel's
-    # draft shows the key it needs at once.
+    # draft shows the key it needs at once; the .env's list is drawn again when what it
+    # says changes (a variable now named by the config, or no longer). Fired twice as the
+    # page loads in a tab other than the first: both runs set the same number, so the
+    # list is drawn once.
     if config is not None:
+
+        def on_config(rev: int, last: Any, *values: Config) -> tuple[Any, ...]:
+            rows = file_rows(values)
+            if rows == last:
+                return report(*values), gr.skip(), gr.skip()
+            return report(*values), rev + 1, rows
+
         config.change(
-            report, inputs=inputs, outputs=[secrets_md], show_progress="hidden"
+            on_config,
+            inputs=[env_revision, drawn, *inputs],
+            outputs=[secrets_md, env_revision, drawn],
+            show_progress="hidden",
         )
 
     timer = gr.Timer(1)
@@ -1498,23 +1522,25 @@ def secrets_panel(model: AppModel, config: gr.State | None = None) -> None:
     def on_secrets_tick(last: int | None, rev: int, *values: Config) -> tuple[Any, ...]:
         current_revision = model.secrets.revision
         if last is None:
-            return gr.skip(), gr.skip(), current_revision
+            return gr.skip(), gr.skip(), current_revision, gr.skip()
         if last == current_revision:
-            return gr.skip(), gr.skip(), gr.skip()
-        return report(*values), rev + 1, current_revision
+            return gr.skip(), gr.skip(), gr.skip(), gr.skip()
+        return report(*values), rev + 1, current_revision, file_rows(values)
 
     timer.tick(
         on_secrets_tick,
         inputs=[seen, env_revision, *inputs],
-        outputs=[secrets_md, env_revision, seen],
+        outputs=[secrets_md, env_revision, seen, drawn],
         show_progress="hidden",
     )
 
-    def on_refresh(rev: int, *values: Config) -> tuple[str, int]:
-        return report(*values), rev + 1
+    def on_refresh(rev: int, *values: Config) -> tuple[Any, ...]:
+        return report(*values), rev + 1, file_rows(values)
 
     refresh.click(
-        on_refresh, inputs=[env_revision, *inputs], outputs=[secrets_md, env_revision]
+        on_refresh,
+        inputs=[env_revision, *inputs],
+        outputs=[secrets_md, env_revision, drawn],
     )
 
     def on_save(name: str, value: str, rev: int, *values: Config) -> tuple[Any, ...]:
@@ -1522,17 +1548,17 @@ def secrets_panel(model: AppModel, config: gr.State | None = None) -> None:
         try:
             source = model.secrets.set(name, value or "")
         except ValueError as exc:
-            return f"⚠️ {exc}", gr.skip(), value, gr.skip()
+            return f"⚠️ {exc}", gr.skip(), value, gr.skip(), gr.skip()
         note = (
             f"✅ `{name}` saved in the .env, but the shell's value is the one used: "
             "unset it in your shell profile to use this one."
             if source == "shell"
             else f"✅ `{name}` saved."
         )
-        return note, report(*values), "", rev + 1
+        return note, report(*values), "", rev + 1, file_rows(values)
 
     save_secret.click(
         on_save,
         inputs=[variable, secret, env_revision, *inputs],
-        outputs=[secret_notice, secrets_md, secret, env_revision],
+        outputs=[secret_notice, secrets_md, secret, env_revision, drawn],
     )

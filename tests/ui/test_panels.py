@@ -204,14 +204,14 @@ def test_the_secrets_panel_follows_a_key_saved_elsewhere_without_a_reload(
     tick = _handler(page, "on_secrets_tick")
 
     # The page loads: its table, and the store's revision that table shows.
-    shown, _, seen = _handler(page, "on_load")(cloud)
+    shown, _, seen, _ = _handler(page, "on_load")(cloud)
     assert "❌ not set" in shown
-    assert tick(seen, 1, cloud) == (gr.skip(), gr.skip(), gr.skip())  # nothing new
+    assert tick(seen, 1, cloud) == (gr.skip(),) * 4  # nothing new
 
     # A key saved on a line of the Setup panel, or in another tab: the same store. Even
     # when the timer's first tick comes after it (a tab not opened yet), it is seen.
     model.secrets.set("CLOUD_VOICE_KEY", "s3cret")
-    report, revision, now = tick(seen, 1, cloud)
+    report, revision, now, _ = tick(seen, 1, cloud)
 
     assert "`CLOUD_VOICE_KEY`" in report and "the folder's .env" in report
     assert "not set" not in report
@@ -1290,3 +1290,31 @@ def test_a_fold_has_its_settings_beside_what_the_machine_has(tmp_path: Path) -> 
 def test_a_section_s_open_must_be_one_of_its_values() -> None:
     with pytest.raises(ValueError, match="open is one of needs, always, folded, not"):
         Section("speech", SpeechLib(), open="sometimes")  # type: ignore[arg-type]
+
+
+def test_the_env_list_is_drawn_again_only_when_its_rows_change(tmp_path: Path) -> None:
+    model = _model(tmp_path)
+    model.secrets.set("OLD_KEY", "s3cret")
+    cloud = {"speech": {"module": {"type": "cloud-voice", "voice_id": "v"}}}
+    with gr.Blocks() as page:
+        draft = gr.State(DEFAULTS)
+        secrets_panel(model, draft)
+    on_config = _handler(page, "on_config")
+
+    # The list's render follows its hidden number only, never the config: a State's
+    # change fires twice as the page loads in a tab other than the first, and each run of
+    # a render drops the listeners of the last (a row's Remove clicked in between failed).
+    (render,) = [f for f in page.fns.values() if f.fn and f.fn.__name__ == "apply"]
+    triggers = [
+        page.blocks[target] for target, _ in render.targets if target is not None
+    ]
+    assert [type(block) for block in triggers] == [gr.Number]
+
+    _, _, _, drawn = _handler(page, "on_load")(DEFAULTS)
+    # The config changed, its rows not (OLD_KEY named by neither): not drawn again.
+    assert on_config(3, drawn, {**DEFAULTS, "other": {}})[1:] == (gr.skip(), gr.skip())
+    # A module naming a key: its rows change, drawn again once, the same number on the
+    # second firing of the change.
+    model.secrets.set("CLOUD_VOICE_KEY", "s3cret")
+    first, second = on_config(3, drawn, cloud), on_config(3, drawn, cloud)
+    assert first[1] == second[1] == 4 and first[2] != drawn

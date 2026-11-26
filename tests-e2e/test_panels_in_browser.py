@@ -255,7 +255,8 @@ def test_a_variable_of_the_env_file_is_removed_from_its_row(
 
     assert env_path.read_text() == 'KEEP_KEY="x2"\n'
     page.get_by_text("KEEP_KEY").first.wait_for()
-    assert page.get_by_role("button", name="Remove").count() == 1
+    # The list drawn again: one row, one Remove.
+    sync_api.expect(page.get_by_role("button", name="Remove")).to_have_count(1)
 
 
 def test_one_item_is_prepared_from_its_row_with_its_progress(
