@@ -17,6 +17,8 @@ __all__ = [
     "config_report",
     "item_status",
     "secrets_report",
+    "section_line",
+    "section_status",
     "setup_summary",
 ]
 
@@ -56,6 +58,37 @@ def setup_summary(items: Sequence[SetupItem]) -> str:
     return "✅ **Ready**"
 
 
+def section_status(
+    items: Sequence[SetupItem], problems: Sequence[Problem], installed: bool = True
+) -> str:
+    """A section's status in a fold's line, short, in the table's words."""
+    if not installed:
+        return "❌ not installed"
+    if problems:
+        return f"❌ {_count(len(problems), 'problem')} in the config"
+    blocking = sum(1 for item in items if item.blocking)
+    if blocking:
+        return f"❌ {_count(blocking, 'required item')} missing"
+    deferred = sum(1 for item in items if item.deferred)
+    if deferred:
+        return f"🟡 {_count(deferred, 'optional item')} missing"
+    return "✅ Ready"
+
+
+def section_line(
+    title: str,
+    modules: Sequence[str],
+    items: Sequence[SetupItem],
+    problems: Sequence[Problem],
+    installed: bool = True,
+) -> str:
+    """A fold's title line: ``<title> — <modules> · <status>``, the modules selected in
+    the section's choices (none: ``<title> · <status>``). *installed*: False for a section
+    whose library does not import."""
+    head = f"{title} — {' · '.join(modules)}" if modules else title
+    return f"{head} · {section_status(items, problems, installed)}"
+
+
 @dataclass(frozen=True)
 class Progress:
     """What an item's line shows of an action on it (a preparation, an install): running,
@@ -79,6 +112,21 @@ def _bar(fraction: float) -> str:
 
 
 HEADER = ("**Item**", "**Status**", "**Explanation**", "**Action**")
+
+# What an install's line (and a section's Install all box) says while it runs, and once it
+# has ended well. Both are shown before the page may stop updating: once an install lands,
+# the first load of what it brought (by the page itself, then by the section's check) can
+# hold the app for a while, and no update reaches the page meanwhile, so the words shown
+# when it starts are the ones read throughout. No running count of seconds on an install:
+# one stuck at a value would read as a hang.
+INSTALLING_NOTE = (
+    "Once installed, loading the new packages the first time can take a while, and "
+    "the page may stop updating meanwhile."
+)
+CHECKING_NOTE = (
+    "Installed. Checking the section again: this first check loads the new packages "
+    "and can take up to a minute; the lines update when it is done."
+)
 OPTIONAL = "Without it, the first start gets it itself and is slower."
 
 
@@ -105,26 +153,30 @@ def item_status(item: SetupItem, progress: Progress | None = None) -> tuple[str,
             ("Install", "Installing") if progress.install else ("Prepare", "Preparing")
         )
         if progress.waiting:
-            return "⏳ **Waiting**", "Waiting for another install…"
+            return "⏳ **Waiting**", _join(
+                "Waiting for another install…", INSTALLING_NOTE
+            )
         if progress.running and progress.fraction is not None:
             return (
                 f"⏳ **{doing}… {progress.fraction:.0%}**",
                 f"`{_bar(progress.fraction)}` {progress.message}".rstrip(),
             )
-        if progress.running:
+        if progress.running and progress.install:
             # uv's own words ("Downloading numpy", "Prepared 3 packages") are marked as
             # its: read alone they would name another action than the install.
-            message = (
-                f"uv: {progress.message}"
-                if progress.install and progress.message
-                else progress.message
-            )
+            message = f"uv: {progress.message}." if progress.message else ""
+            return "⏳ **Installing…**", _join(message, INSTALLING_NOTE)
+        if progress.running:
             return (
                 f"⏳ **{doing}…**",
-                _join(message, f"({progress.elapsed_s:.0f} s)"),
+                _join(progress.message, f"({progress.elapsed_s:.0f} s)"),
             )
         if progress.ok:
-            return "✅ **Ready**", "Installed." if progress.install else "Prepared."
+            # An install changes what the section needs: it is checked again next, which
+            # loads what it installed (slow the first time).
+            if progress.install:
+                return "✅ **Ready**", CHECKING_NOTE
+            return "✅ **Ready**", "Prepared."
         return "❌ **Failed**", _join(progress.message, f"**{verb}** tries again.")
     if item.status == "ready":
         return "✅ **Ready**", item.detail

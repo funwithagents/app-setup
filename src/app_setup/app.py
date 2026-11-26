@@ -15,7 +15,7 @@ import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, get_args
 
 from app_setup.config_file import ConfigFile
 from app_setup.contract import (
@@ -36,10 +36,15 @@ __all__ = [
     "Prepared",
     "Problem",
     "Section",
+    "SectionOpen",
     "SetupItem",
 ]
 
 ContractSource = SetupContract | Callable[[], SetupContract]
+
+# Whether a section's fold is open as the Setup panel loads: when it needs something (a
+# problem in the config, a required item missing), always, or folded.
+SectionOpen = Literal["needs", "always", "folded"]
 
 # Where the config comes from: the app's folder, or a single file (specs/config-file.md).
 ConfigSource = ConfigFolder | ConfigFile
@@ -54,6 +59,13 @@ class Section:
     of its own extras: the section then shows that extra (*host_extra*) as missing until the
     import succeeds. *when*, given the whole config, says whether the section is used (a
     section for one embodiment only); an unused section is neither drawn nor checked.
+
+    *optional*: the user may leave the section out. Absent from the config, it is off: not
+    used, not checked, not counted by the blockers (specs/setup-overview.md). *default* is
+    the document **Add** writes into the config to turn it on (``{}`` when not given).
+
+    *open*: whether its fold is open as the Setup panel loads — "needs" (when it needs
+    something: a problem in the config, a required item missing), "always", "folded".
     """
 
     name: str
@@ -61,6 +73,16 @@ class Section:
     title: str | None = None
     when: Callable[[Mapping[str, Any]], bool] | None = None
     host_extra: str | None = None
+    optional: bool = False
+    default: Mapping[str, Any] | None = None
+    open: SectionOpen = "needs"
+
+    def __post_init__(self) -> None:
+        if self.open not in get_args(SectionOpen):
+            raise ValueError(
+                f"section '{self.name}': open is one of "
+                f"{', '.join(get_args(SectionOpen))}, not {self.open!r}"
+            )
 
 
 @dataclass(frozen=True)
@@ -86,6 +108,11 @@ class App:
             raise ValueError(
                 f"{self.name}: a bare app has exactly one section, "
                 f"not {len(self.sections)}"
+            )
+        if self.bare and self.sections[0].optional:
+            raise ValueError(
+                f"{self.name}: a bare app's only section is the whole config: it cannot "
+                "be optional"
             )
 
 
@@ -275,18 +302,63 @@ class AppModel:
         loaded.load()
         return loaded.error
 
+    def section_title(self, name: str) -> str:
+        """A section's title: the app's, else its library's, else its key."""
+        section = self.section(name)
+        description = self.description(name)
+        return section.title or (description.title if description else name)
+
+    def _applies(self, section: Section, config: Mapping[str, Any]) -> bool:
+        return section.when is None or bool(section.when(config))
+
     def used(
         self, config: Mapping[str, Any], sections: Iterable[str] | None = None
     ) -> list[str]:
         """The sections this config uses, in declaration order; only those of
-        *sections* when given (the Setup panel acts on one section at a time)."""
+        *sections* when given (the Setup panel acts on one section at a time). An optional
+        section absent from the config is off: not used."""
         wanted = None if sections is None else set(sections)
         return [
             section.name
             for section in self.app.sections
-            if (section.when is None or section.when(config))
+            if self._applies(section, config)
+            and not (section.optional and section.name not in config)
             and (wanted is None or section.name in wanted)
         ]
+
+    def optional_off(self, config: Mapping[str, Any]) -> list[str]:
+        """The optional sections the config leaves out (and whose `when` applies): those
+        the user can add, in declaration order."""
+        return [
+            section.name
+            for section in self.app.sections
+            if section.optional
+            and section.name not in config
+            and self._applies(section, config)
+        ]
+
+    def _optional(self, name: str) -> Section:
+        section = self.section(name)
+        if not section.optional:
+            raise ValueError(f"The '{name}' section is not optional.")
+        return section
+
+    def add_section(
+        self,
+        config: Mapping[str, Any],
+        name: str,
+        document: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """*config* with the optional section *name* on: *document* (the one the user
+        removed earlier, kept by the panel), else the section's default, else ``{}``."""
+        section = self._optional(name)
+        chosen = document if document is not None else section.default
+        return {**config, name: copy.deepcopy(dict(chosen or {}))}
+
+    def remove_section(self, config: Mapping[str, Any], name: str) -> dict[str, Any]:
+        """*config* without the optional section *name*: off."""
+        self._optional(name)
+        return {key: value for key, value in config.items() if key != name}
 
     @property
     def _base_dir(self) -> str:

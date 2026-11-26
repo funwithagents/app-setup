@@ -383,9 +383,7 @@ def _advanced(item: FormItem) -> bool:
 
 def section_title(model: AppModel, name: str) -> str:
     """A section's title: the app's, else its library's, else its key."""
-    section = model.section(name)
-    description = model.description(name)
-    return section.title or (description.title if description else name)
+    return model.section_title(name)
 
 
 def render_section(

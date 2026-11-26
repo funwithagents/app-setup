@@ -31,6 +31,7 @@ __all__ = [
     "pointer",
     "secret_variables",
     "select_branch",
+    "selected_modules",
     "set_at",
     "toggle_group",
 ]
@@ -242,6 +243,27 @@ def _group(spec: ObjectSpec, node: Any, path: Path, required: bool) -> FormGroup
 def layout(schema: ObjectSpec, document: Any) -> FormGroup:
     """The form of *document* under *schema*: its root group."""
     return _group(schema, document, (), required=True)
+
+
+def selected_modules(schema: ObjectSpec, document: Any) -> list[str]:
+    """The title of the module selected in each module choice of *document*'s form, in the
+    form's order (an optional object switched off has none): what a section's line
+    shows."""
+    found: list[str] = []
+
+    def walk(group: FormGroup) -> None:
+        if not group.enabled:
+            return
+        for item in group.items:
+            if isinstance(item, FormChoice):
+                branch = item.choice.branch(item.selected)
+                if branch is not None:
+                    found.append(branch.title)
+            elif isinstance(item, FormGroup):
+                walk(item)
+
+    walk(layout(schema, document))
+    return found
 
 
 def coerce(item: FormField | FormRaw, raw: Any) -> tuple[Any, str | None]:

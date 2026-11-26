@@ -3,6 +3,7 @@ import os
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,7 @@ from app_setup.ui.panels import (
     _table_lines,
     _wire_table,
 )
+from app_setup.ui.report import CHECKING_NOTE, INSTALLING_NOTE
 
 DEFAULTS = {"speech": {"module": {"type": "local-voice"}}}
 
@@ -202,14 +204,14 @@ def test_the_secrets_panel_follows_a_key_saved_elsewhere_without_a_reload(
     tick = _handler(page, "on_secrets_tick")
 
     # The page loads: its table, and the store's revision that table shows.
-    shown, _, seen = _handler(page, "on_load")(cloud)
+    shown, _, seen, _ = _handler(page, "on_load")(cloud)
     assert "❌ not set" in shown
-    assert tick(seen, 1, cloud) == (gr.skip(), gr.skip(), gr.skip())  # nothing new
+    assert tick(seen, 1, cloud) == (gr.skip(),) * 4  # nothing new
 
     # A key saved on a line of the Setup panel, or in another tab: the same store. Even
     # when the timer's first tick comes after it (a tab not opened yet), it is seen.
     model.secrets.set("CLOUD_VOICE_KEY", "s3cret")
-    report, revision, now = tick(seen, 1, cloud)
+    report, revision, now, _ = tick(seen, 1, cloud)
 
     assert "`CLOUD_VOICE_KEY`" in report and "the folder's .env" in report
     assert "not set" not in report
@@ -257,10 +259,10 @@ def test_each_section_has_its_own_checks_acting_on_it_alone(tmp_path: Path) -> N
 
     buttons = [b.value for b in page.blocks.values() if isinstance(b, gr.Button)]
     speech_check, backup_check = _handlers(page, "on_check")
-    speech_problems, _, speech_items = speech_check(config)
+    speech_problems, _, speech_items, *_ = speech_check(config)
     # A check finding what the last one found leaves the table as it is (not redrawn).
     assert speech_check(config)[2] == speech_items
-    backup_problems, _, _ = backup_check(config)
+    backup_problems, *_ = backup_check(config)
 
     assert buttons.count("Test") == 2 and buttons.count("Prepare all") == 2
     assert "voice_id" not in speech_problems
@@ -272,15 +274,12 @@ def test_each_section_has_its_own_checks_acting_on_it_alone(tmp_path: Path) -> N
         "lexicon",
     ]
 
-    # A section the config does not use is hidden, the others shown and checked. Each
-    # section: its block, its problems, its summary, its items, its output.
-    redraw = _handler(page, "on_redraw")
-    shown = redraw(config)
-    hidden = redraw({**config, "use_backup": False})
-    assert (shown[0]["visible"], shown[5]["visible"]) == (True, True)
-    assert (hidden[0]["visible"], hidden[5]["visible"]) == (True, False)
-    assert "/backup/module/voice_id" in shown[6]
-    assert hidden[6] == "" and hidden[8] == ()
+    # A section the config does not use is hidden, the others shown and checked.
+    shown = _redraw(page, model, "backup", config)
+    hidden = _redraw(page, model, "backup", {**config, "use_backup": False})
+    assert shown.fold["visible"] is True and "/backup/module/voice_id" in shown.problems
+    assert hidden.fold["visible"] is False
+    assert (hidden.problems, hidden.items) == ("", ())
 
 
 def test_an_app_with_autostart_gets_its_checkbox_saved_at_once(tmp_path: Path) -> None:
@@ -421,7 +420,7 @@ def test_a_field_left_checks_its_section_again(
     assert listeners["submit"].fn is listeners["blur"].fn
     assert count == 1 and edited in listeners["blur"].outputs
 
-    _, summary, items = on_edited(left)
+    _, summary, items, *_ = on_edited(left)
     key = next(i for i in items if i.id == "key:OTHER_KEY")
     assert key.status == "ready" and summary == "✅ **Ready**"
     assert on_edited(cloud)[2][-1].status == "missing"  # CLOUD_VOICE_KEY, unset
@@ -444,7 +443,7 @@ def test_the_timer_checks_again_after_a_key_was_saved_and_only_then(
     )
 
     model.secrets.set("CLOUD_VOICE_KEY", "s3cret")  # from the Secrets panel, say
-    seen_now, problems, summary, items = tick(cloud, 1, seen, None)[5:-2]
+    seen_now, problems, summary, items, _ = tick(cloud, 1, seen, None)[5:-2]
 
     assert seen_now == model.secrets.revision != seen
     assert "valid" in problems and summary == "✅ **Ready**"
@@ -487,10 +486,12 @@ def test_the_rows_timer_runs_only_while_a_line_is_acted_on(tmp_path: Path) -> No
     model = _model(tmp_path, sections=(Section("speech", lib),))
     with gr.Blocks() as page:
         setup_panel(model)
-    tick = _handler(page, "on_rows_tick")  # one for the whole panel
     on_button = _handlers(page, "on_button")[0]  # one per row; the row given below
     items = tuple(model.check_setup(DEFAULTS))
     weights = next(i for i, item in enumerate(items) if item.id == "weights:Ada")
+
+    def tick(items: Any) -> list[Any]:  # one for the whole panel
+        return _rows_tick(page, DEFAULTS, items)
 
     # At rest: nothing sent, and the timer turns itself off.
     *rows, timer = tick(items)
@@ -715,18 +716,16 @@ def test_installs_run_one_at_a_time_the_second_waiting_its_turn(
 
     status, explanation, _ = _line(actions, gate)
     assert status == "⏳ **Installing…**"
-    assert explanation.startswith(
-        "uv: Resolved 1 extra(s) ("
-    )  # uv's latest line, the time
+    assert explanation == f"uv: Resolved 1 extra(s). {INSTALLING_NOTE}"
     assert _line(actions, local)[:2] == (
         "⏳ **Waiting**",
-        "Waiting for another install…",
+        f"Waiting for another install… {INSTALLING_NOTE}",
     )
     assert _line(actions, local)[2]["interactive"] is False
 
     installer.gates[0].set()
     _wait(lambda: len(installer.runs) == 2)  # the second starts once the first is done
-    assert _line(actions, gate)[:2] == ("✅ **Ready**", "Installed.")
+    assert _line(actions, gate)[:2] == ("✅ **Ready**", CHECKING_NOTE)
     assert _line(actions, local)[0] == "⏳ **Installing…**"
     installer.fail = True
     installer.gates[1].set()
@@ -739,7 +738,13 @@ def test_installs_run_one_at_a_time_the_second_waiting_its_turn(
     )
 
 
-def test_install_all_installs_every_missing_extra_in_one_run(
+def _rows_tick(page: gr.Blocks, config: dict[str, Any], *checked: Any) -> list[Any]:
+    """The rows' timer's tick for a one-section panel: the rows' cells and buttons, the
+    section's checks (problems, summary, items, fold), its output box, then the timer."""
+    return _handler(page, "on_rows_tick")(config, *checked)
+
+
+def test_install_all_installs_every_missing_extra_in_one_run_never_waited_for(
     tmp_path: Path, installer: FakeInstaller
 ) -> None:
     lib = TwoExtras()
@@ -747,43 +752,98 @@ def test_install_all_installs_every_missing_extra_in_one_run(
     model = _model(tmp_path, sections=(Section("speech", lib),))
     with gr.Blocks() as page:
         setup_panel(model)
-    install_all = _handler(page, "on_install_all")(DEFAULTS)
+    items = tuple(model.check_setup(DEFAULTS))
 
-    first = next(install_all)
+    # Started, and returned at once: no event stays open while packages land.
+    output, *_, timer = _handler(page, "on_install_all")(DEFAULTS)
+    assert output["value"].startswith("Installing: speech-gate, speech-local")
+    assert timer.active is True
     _wait(lambda: len(installer.runs) == 1)
+    # The rows' timer follows it: its lines, its output box.
+    *_, box, timer = _rows_tick(page, DEFAULTS, items)
+    assert box["value"].splitlines() == [
+        "Installing: speech-gate, speech-local",
+        "Resolved 2 extra(s)",
+        INSTALLING_NOTE,
+    ]
+    assert timer.active is True
+
+    lib.installed["local-voice"] = True  # what the install did
     installer.gates[0].set()
-    *_, (output, _, summary, _) = [first, *install_all]
+    # Ended well: first shown on its lines and in its box, the timer still on...
+    shown: list[Any] = []
+
+    def ended() -> bool:
+        shown[:] = _rows_tick(page, DEFAULTS, items)
+        return "Checking the section again" in shown[0]
+
+    _wait(ended)
+    *_, box, timer = shown
+    assert box["value"].splitlines() == [
+        "Installing: speech-gate, speech-local",
+        "Resolved 2 extra(s)",
+        "Done.",
+        CHECKING_NOTE,
+    ]
+    assert timer.active is True
+    # ...then, at the next tick, the section checked again.
+    *_, checked, _, _, timer = _rows_tick(page, DEFAULTS, items)
 
     assert installer.runs == [["speech-gate", "speech-local"]]
-    assert output["value"].startswith("Installing: speech-gate, speech-local")
-    assert output["value"].endswith("Done.")
-    assert summary.startswith("❌ **2 required items missing**")  # the fake stays so
+    # Ended well: the section checked again, its new lines with it (the voice, the
+    # lexicon), and the timer off.
+    assert [i.id for i in checked] == [
+        "extra:speech-lib[gate]",
+        "extra:speech-lib[local-voice]",
+        "weights:Ada",
+        "lexicon",
+    ]
+    assert timer.active is False
+    # Checked once: the next tick sends nothing.
+    assert all(
+        update == gr.skip() for update in _rows_tick(page, DEFAULTS, checked)[:-1]
+    )
 
 
-def test_an_extra_installed_from_its_line_checks_the_section_again(
+def test_an_extra_installed_from_its_line_is_followed_then_checks_the_section_again(
     tmp_path: Path, installer: FakeInstaller
 ) -> None:
     lib = SpeechLib()
     lib.installed["local-voice"] = False
     model = _model(tmp_path, sections=(Section("speech", lib),))
-    actions = _Actions(model)
-    page = _table(model, actions)
+    with gr.Blocks() as page:
+        setup_panel(model)
     on_button = _handlers(page, "on_button")[0]  # one per row; the row given below
     items = tuple(model.check_setup(DEFAULTS))
+    assert [i.id for i in items] == [
+        "extra:speech-lib[local-voice]"
+    ]  # nothing else yet
 
-    def release() -> None:
-        _wait(lambda: len(installer.runs) == 1)
-        lib.installed["local-voice"] = True  # what the install did
-        installer.gates[0].set()
+    # The click returns at once, the install running: the line says so, its button
+    # disabled, the rows' timer on.
+    cells, button, *checks, timer = on_button(items, DEFAULTS, index=0)
+    assert "⏳ <strong>" in cells and button["interactive"] is False
+    assert checks == [gr.skip()] * 4 and timer.active is True
+    _wait(lambda: len(installer.runs) == 1)
+    tick = _rows_tick(page, DEFAULTS, items)
+    assert "uv: Resolved 1 extra(s)" in tick[0]  # uv's latest words, live
 
-    threading.Thread(target=release).start()
-    updates = on_button(items, DEFAULTS, index=0)
-    # One value per output: the line's cells and button, the section's checks, the timer.
-    assert len(updates) == 6
-    *_, items, _ = updates
+    lib.installed["local-voice"] = True  # what the install did
+    installer.gates[0].set()
+    # Its end shown first, before the check that loads the library just installed...
+    _wait(lambda: "Checking the section again" in _rows_tick(page, DEFAULTS, items)[0])
+    # ...then the section checked again, at the next tick.
+    *_, checked, fold, _, timer = _rows_tick(page, DEFAULTS, items)
 
     assert installer.runs == [["speech-local"]]
-    assert items[0].status == "ready"
+    # The section checked again: the library's own lines now, each with its action.
+    assert [(i.id, i.status) for i in checked] == [
+        ("extra:speech-lib[local-voice]", "ready"),
+        ("weights:Ada", "missing"),
+        ("lexicon", "missing"),
+    ]
+    assert fold["label"] == "Speech — Local voice · ❌ 1 required item missing"
+    assert timer.active is False
 
 
 def test_a_key_saved_on_its_line_reaches_the_store_and_turns_ready(
@@ -850,12 +910,12 @@ def test_a_file_run_as_it_is_gets_a_read_only_setup_panel(tmp_path: Path) -> Non
     for name in ("Check", "Install all", "Prepare all", "Test"):
         assert name in buttons
     assert _handlers(page, "on_button") and _handlers(page, "on_save_key")
-    _, summary, items = _handler(page, "on_check")(model.saved_config())
+    _, summary, items, *_ = _handler(page, "on_check")(model.saved_config())
     assert summary and [i.id for i in items][:1] == ["extra:speech-lib[local-voice]"]
-    # The tick has no lock nor unsaved line to keep: the secrets' revision, the checks,
-    # the rows' timer, what it showed.
+    # The tick has no lock nor unsaved line to keep: the secrets' revision, the checks
+    # (problems, summary, items, fold), the rows' timer, what it showed.
     tick = _handler(page, "on_tick")(model.saved_config(), 1, None, None)
-    assert tick[0] == model.secrets.revision and len(tick) == 1 + 3 + 2
+    assert tick[0] == model.secrets.revision and len(tick) == 1 + 4 + 2
 
 
 def test_the_read_only_form_shows_every_field_and_edits_none(tmp_path: Path) -> None:
@@ -894,3 +954,367 @@ def test_a_key_saved_from_a_line_reaches_the_file_s_env(
     _handlers(page, "on_save_key")[0]("s3cret", shown, cloud, index=index)
 
     assert (tmp_path / ".env").read_text() == 'CLOUD_VOICE_KEY="s3cret"\n'
+
+
+BACKUP_DEFAULT = {"module": {"type": "local-voice", "voice": "Bo"}}
+
+
+def _with_backup(tmp_path: Path, speech: SpeechLib, backup: SpeechLib) -> AppModel:
+    """The speech section, and an optional backup voice the user may add."""
+    return _model(
+        tmp_path,
+        sections=(
+            Section("speech", speech),
+            Section(
+                "backup",
+                backup,
+                title="Backup voice",
+                optional=True,
+                default=BACKUP_DEFAULT,
+            ),
+        ),
+    )
+
+
+@dataclass
+class _Redrawn:
+    """What one section's redraw sends: its own checks, output, "off" line, the panel
+    revision it saw and whether its fold was set; for each other section its fold, its
+    "off" line and its own revision; the tab's layout."""
+
+    problems: Any
+    summary: Any
+    items: Any
+    fold: Any
+    output: Any
+    off: Any
+    seen: Any
+    opened: Any
+    others: dict[str, tuple[Any, Any, Any]]
+    layout: Any
+
+
+def _redraw(
+    page: gr.Blocks,
+    model: AppModel,
+    name: str,
+    config: dict[str, Any],
+    *,
+    panel_wide: bool = True,
+    opened: bool = False,
+    shown: dict[str, tuple[bool, bool]] | None = None,
+) -> _Redrawn:
+    """Section *name*'s redraw, as gradio runs it: on a panel-wide change (the page loaded,
+    Revert, Reset) or on a change of the section's own (a module switched, Add, Remove),
+    every section's own revision at 5."""
+    sections = model.app.sections
+    index = [section.name for section in sections].index(name)
+    fn = _handlers(page, "on_section_redraw")[index]
+    rev, seen = (2, 1) if panel_wide else (2, 2)
+    out = list(fn(config, rev, seen, opened, shown, *([5] * len(sections))))
+    problems, summary, items, fold, output = out[:5]
+    rest = out[5:]
+    off = rest.pop(0) if sections[index].optional else None
+    seen_now, opened_now = rest[:2]
+    rest = rest[2:]
+    others: dict[str, tuple[Any, Any, Any]] = {}
+    for section in sections:
+        if section.name == name:
+            continue
+        other_fold = rest.pop(0)
+        other_off = rest.pop(0) if section.optional else None
+        others[section.name] = (other_fold, other_off, rest.pop(0))
+    (layout,) = rest
+    return _Redrawn(
+        problems,
+        summary,
+        items,
+        fold,
+        output,
+        off,
+        seen_now,
+        opened_now,
+        others,
+        layout,
+    )
+
+
+def test_a_fold_s_line_follows_a_check_and_a_module_switch(tmp_path: Path) -> None:
+    model = _model(tmp_path)
+    with gr.Blocks() as page:
+        setup_panel(model)
+    cloud = {"speech": {"module": {"type": "cloud-voice"}}}
+
+    *_, fold = _handler(page, "on_check")(DEFAULTS)
+    assert fold["label"] == "Speech — Local voice · ❌ 1 required item missing"
+
+    # The module switched: the section redraws, and its line names the new module.
+    redrawn = _redraw(page, model, "speech", cloud, panel_wide=False, opened=True)
+    assert redrawn.fold["label"] == (
+        "Speech — Cloud voice (hosted) · ❌ 1 problem in the config"
+    )
+    assert redrawn.output == {"__type__": "update", "value": "", "visible": False}
+
+
+def test_a_change_in_one_section_checks_and_redraws_it_alone(tmp_path: Path) -> None:
+    speech, backup = SpeechLib(), SpeechLib()
+    model = _with_backup(tmp_path, speech, backup)
+    config = {**DEFAULTS, "backup": BACKUP_DEFAULT}
+    with gr.Blocks() as page:
+        setup_panel(model)
+    checked: list[str] = []
+    for name, lib in (("speech", speech), ("backup", backup)):
+        original = lib.check_setup
+
+        def spy(
+            config: Any, *, base_dir: Any = None, name: str = name, f: Any = original
+        ) -> Any:
+            checked.append(name)
+            return f(config, base_dir=base_dir)
+
+        lib.check_setup = spy  # type: ignore[method-assign]
+    shown = {"speech": (True, False), "backup": (True, False)}
+
+    # The speech's module switched: the speech alone is checked; the backup, still used
+    # as before, is left as it is (not checked, not shown again, its form not redrawn).
+    redrawn = _redraw(page, model, "speech", config, panel_wide=False, shown=shown)
+    assert checked == ["speech"]
+    assert redrawn.others["backup"] == (gr.skip(), gr.skip(), gr.skip())
+    assert redrawn.seen == 2 and redrawn.layout == shown
+    # Each form drawn again on a panel-wide change and on its own section's only.
+    renders = [f for f in page.fns.values() if f.fn and f.fn.__name__ == "apply"]
+    revisions = [
+        b
+        for b in page.blocks.values()
+        if isinstance(b, gr.Number) and b.visible is False
+    ]
+    panel, speech_rev, backup_rev = revisions[0], *revisions[1:3]
+    triggers = [{target for target, _ in f.targets} for f in renders]
+    assert triggers == [
+        {panel._id, speech_rev._id},
+        {panel._id, backup_rev._id},
+    ]
+
+
+def test_a_section_s_change_shows_or_hides_the_sections_its_when_reads(
+    tmp_path: Path,
+) -> None:
+    # The backup is used only while the speech's voice is "Bo".
+    model = _model(
+        tmp_path,
+        sections=(
+            Section("speech", SpeechLib()),
+            Section(
+                "backup",
+                SpeechLib(),
+                title="Backup voice",
+                when=lambda config: config["speech"]["module"].get("voice") == "Bo",
+            ),
+        ),
+    )
+    with gr.Blocks() as page:
+        setup_panel(model)
+    bo = {
+        "speech": {"module": {"type": "local-voice", "voice": "Bo"}},
+        "backup": BACKUP_DEFAULT,
+    }
+    ada = {**bo, "speech": DEFAULTS["speech"]}
+
+    # Turned true: the backup's own revision bumped, so it alone is drawn and checked.
+    on = _redraw(
+        page,
+        model,
+        "speech",
+        bo,
+        panel_wide=False,
+        shown={"speech": (True, False), "backup": (False, False)},
+    )
+    fold, _, revision = on.others["backup"]
+    assert fold == gr.skip() and revision == 6
+    assert on.layout["backup"] == (True, False)
+    # Turned false: the backup's fold hidden, nothing checked or drawn for it.
+    off = _redraw(page, model, "speech", ada, panel_wide=False, shown=on.layout)
+    fold, _, revision = off.others["backup"]
+    assert fold["visible"] is False and revision == gr.skip()
+    # A panel-wide change: each section redraws itself, none touches the others.
+    wide = _redraw(page, model, "speech", bo, shown=off.layout)
+    assert wide.others["backup"] == (gr.skip(), None, gr.skip())
+
+
+def test_each_section_s_open_says_how_its_fold_starts(tmp_path: Path) -> None:
+    def at_load(speech_open: Any, backup_open: Any) -> tuple[Any, Any]:
+        speech, backup = SpeechLib(), SpeechLib()  # the speech needs its lexicon
+        backup.lexicon, backup.downloaded = True, {"Bo"}  # the backup ready
+        model = _model(
+            tmp_path / f"{speech_open}-{backup_open}",
+            sections=(
+                Section("speech", speech, open=speech_open),
+                Section("backup", backup, optional=True, open=backup_open),
+            ),
+        )
+        with gr.Blocks() as page:
+            setup_panel(model)
+        config = {**DEFAULTS, "backup": BACKUP_DEFAULT}
+        speech_now = _redraw(page, model, "speech", config)
+        backup_now = _redraw(page, model, "backup", config)
+        assert speech_now.opened is True  # set once: afterwards, the user's
+        # Afterwards, a redraw (a module switched, a check) moves none.
+        for name in ("speech", "backup"):
+            for panel_wide in (True, False):
+                later = _redraw(
+                    page, model, name, config, panel_wide=panel_wide, opened=True
+                )
+                assert "open" not in later.fold
+        return speech_now.fold["open"], backup_now.fold["open"]
+
+    # "needs", the default: open when the section needs something.
+    assert Section("s", SpeechLib()).open == "needs"
+    assert at_load("needs", "needs") == (True, False)
+    # Each section its own: "always" open even ready, "folded" even needing something.
+    assert at_load("folded", "always") == (False, True)
+    assert at_load("needs", "always") == (True, True)
+
+
+def test_a_lone_section_is_open_only_when_it_says_so(tmp_path: Path) -> None:
+    def at_load(own: Any) -> Any:
+        lib = SpeechLib()
+        lib.lexicon, lib.downloaded = True, {"Ada"}  # ready
+        model = _model(tmp_path / own, sections=(Section("speech", lib, open=own),))
+        with gr.Blocks() as page:
+            setup_panel(model)
+        return _redraw(page, model, "speech", DEFAULTS).fold["open"]
+
+    # No rule of its own for one section: ready, it is folded unless it asks.
+    assert at_load("needs") is False
+    assert at_load("always") is True
+
+
+def test_an_optional_section_is_added_and_removed_in_the_draft(tmp_path: Path) -> None:
+    model = _with_backup(tmp_path, SpeechLib(), SpeechLib())
+    with gr.Blocks() as page:
+        setup_panel(model)
+    drawn = list(page.blocks.values())
+    on_add, on_remove = _handler(page, "on_add"), _handler(page, "on_remove")
+
+    # Off: its fold hidden, its line with Add shown.
+    off = _redraw(page, model, "backup", DEFAULTS)
+    assert off.fold["visible"] is False and off.off["visible"] is True
+    assert _markdown(drawn, "**Backup voice** — off")
+
+    # Add: its default in the draft, its own revision bumped (it alone redrawn), its fold
+    # opened; the redraw shows it, checked, and leaves it open.
+    added, rev, kept, fold = on_add(DEFAULTS, 3, {})
+    assert added == {**DEFAULTS, "backup": BACKUP_DEFAULT} and rev == 4
+    assert fold["open"] is True
+    on = _redraw(page, model, "backup", added, panel_wide=False, opened=True)
+    assert on.fold["visible"] is True and "open" not in on.fold
+    assert on.off["visible"] is False
+    assert on.fold["label"].startswith("Backup voice — Local voice · ")
+    assert "Remove Backup voice" in [b.value for b in drawn if isinstance(b, gr.Button)]
+
+    # Edited, removed, added back: its settings kept, in this tab.
+    edited = {**added, "backup": {"module": {"type": "cloud-voice", "voice_id": "v"}}}
+    removed, rev, kept = on_remove(edited, rev, kept)
+    assert removed == DEFAULTS and rev == 5
+    restored, rev, kept, _ = on_add(removed, rev, kept)
+    assert restored == edited and kept == {}
+    # Draft edits: unsaved until Save.
+    assert _handler(page, "on_draft")(restored, rev) == (UNSAVED_TOP, UNSAVED_BOTTOM)
+
+
+def test_a_read_only_panel_offers_neither_add_nor_remove(tmp_path: Path) -> None:
+    path = tmp_path / "talk.json"
+    path.write_text(json.dumps(DEFAULTS))
+    application = App(
+        name="talk",
+        host="talk-app",
+        sections=(
+            Section("speech", SpeechLib()),
+            Section("backup", SpeechLib(), title="Backup voice", optional=True),
+        ),
+        default_config=DEFAULTS,
+    )
+    model = AppModel(application, ConfigFile(path), SecretStore(tmp_path / ".env", {}))
+    with gr.Blocks() as page:
+        setup_panel(model)
+    drawn = list(page.blocks.values())
+    buttons = [b.value for b in drawn if isinstance(b, gr.Button)]
+
+    assert _markdown(drawn, "**Backup voice** — off")  # said, not offered
+    assert "Add" not in buttons and "Remove Backup voice" not in buttons
+    assert _handlers(page, "on_add") == [] and _handlers(page, "on_remove") == []
+
+
+def test_the_folds_add_lines_and_remove_buttons_are_drawn_once(tmp_path: Path) -> None:
+    with gr.Blocks() as page:
+        setup_panel(_with_backup(tmp_path, SpeechLib(), SpeechLib()))
+    drawn = list(page.blocks.values())
+    folds = [b for b in drawn if isinstance(b, gr.Accordion)]
+    renders = [f for f in page.fns.values() if f.fn and f.fn.__name__ == "apply"]
+
+    # One fold per section (each form's own Advanced folds are drawn in its render).
+    assert [f.label for f in folds] == ["Speech", "Backup voice"]
+    # The forms' renders only, one per section; the panel's two timers, the tick and the
+    # rows'; no whole-config actions (each fold's line says it).
+    assert len(renders) == 2
+    assert len([b for b in drawn if isinstance(b, gr.Timer)]) == 2
+    assert not [b for b in drawn if getattr(b, "value", None) == "Check all"]
+    for name in ("on_add", "on_remove", "on_section_redraw"):
+        for fn in [f for f in page.fns.values() if f.fn and f.fn.__name__ == name]:
+            assert fn.rendered_in is None, name
+
+
+def test_a_fold_has_its_settings_beside_what_the_machine_has(tmp_path: Path) -> None:
+    with gr.Blocks() as page:
+        setup_panel(_model(tmp_path))
+    drawn = list(page.blocks.values())
+    settings = drawn.index(_markdown(drawn, "#### Settings"))
+    machine = _markdown(drawn, "#### On this machine")
+
+    # The right column set apart as a panel; the section's own buttons small, on a row.
+    column = next(
+        b
+        for b in drawn
+        if isinstance(b, gr.Column) and machine._id in [c._id for c in b.children]
+    )
+    assert column.variant == "panel"
+    own = [b for b in drawn if isinstance(b, gr.Button) and b.value == "Check"]
+    assert [b.size for b in own] == ["sm"]
+    # The config's problems (Check's first output) under the form, in the left column.
+    (check,) = [f for f in page.fns.values() if f.fn and f.fn.__name__ == "on_check"]
+    problems = drawn.index(check.outputs[0])
+    assert settings < problems < drawn.index(machine)
+    assert _handler(page, "on_check")(DEFAULTS)[0] == "✅ **The config is valid.**"
+
+
+def test_a_section_s_open_must_be_one_of_its_values() -> None:
+    with pytest.raises(ValueError, match="open is one of needs, always, folded, not"):
+        Section("speech", SpeechLib(), open="sometimes")  # type: ignore[arg-type]
+
+
+def test_the_env_list_is_drawn_again_only_when_its_rows_change(tmp_path: Path) -> None:
+    model = _model(tmp_path)
+    model.secrets.set("OLD_KEY", "s3cret")
+    cloud = {"speech": {"module": {"type": "cloud-voice", "voice_id": "v"}}}
+    with gr.Blocks() as page:
+        draft = gr.State(DEFAULTS)
+        secrets_panel(model, draft)
+    on_config = _handler(page, "on_config")
+
+    # The list's render follows its hidden number only, never the config: a State's
+    # change fires twice as the page loads in a tab other than the first, and each run of
+    # a render drops the listeners of the last (a row's Remove clicked in between failed).
+    (render,) = [f for f in page.fns.values() if f.fn and f.fn.__name__ == "apply"]
+    triggers = [
+        page.blocks[target] for target, _ in render.targets if target is not None
+    ]
+    assert [type(block) for block in triggers] == [gr.Number]
+
+    _, _, _, drawn = _handler(page, "on_load")(DEFAULTS)
+    # The config changed, its rows not (OLD_KEY named by neither): not drawn again.
+    assert on_config(3, drawn, {**DEFAULTS, "other": {}})[1:] == (gr.skip(), gr.skip())
+    # A module naming a key: its rows change, drawn again once, the same number on the
+    # second firing of the change.
+    model.secrets.set("CLOUD_VOICE_KEY", "s3cret")
+    first, second = on_config(3, drawn, cloud), on_config(3, drawn, cloud)
+    assert first[1] == second[1] == 4 and first[2] != drawn

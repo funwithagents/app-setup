@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 from app_setup.app import Problem, SetupItem
 from app_setup.secrets import SecretVariable
 from app_setup.ui.report import (
@@ -6,6 +8,7 @@ from app_setup.ui.report import (
     env_file_rows,
     item_status,
     secrets_report,
+    section_line,
     setup_summary,
 )
 
@@ -91,24 +94,32 @@ def test_a_line_being_acted_on_shows_its_progress_then_how_it_ended() -> None:
         "⏳ **Preparing…**",
         "Building the cache (12 s)",
     )
+    # An install: uv's own words, marked as such ("Downloading" alone reads as another
+    # action), then what comes next, said before the page may stop updating: no count of
+    # seconds, which would stay stuck at a value then.
     assert item_status(EXTRA, installing) == (
         "⏳ **Installing…**",
-        # uv's own words, marked as such: "Downloading" alone reads as another action.
-        "uv: Downloading torch (120 MB) (5 s)",
+        "uv: Downloading torch (120 MB). Once installed, loading the new packages the first time can take a while, and the page may stop updating meanwhile.",
+    )
+    assert item_status(EXTRA, Progress(True, None, "", 0.1, install=True)) == (
+        "⏳ **Installing…**",
+        "Once installed, loading the new packages the first time can take a while, and the page may stop updating meanwhile.",
     )
     assert item_status(EXTRA, waiting) == (
         "⏳ **Waiting**",
-        "Waiting for another install…",
+        "Waiting for another install… Once installed, loading the new packages the first time can take a while, and the page may stop updating meanwhile.",
     )
     assert item_status(VOICE, Progress(False, 1.0, "", 9.0, ok=True)) == (
         "✅ **Ready**",
         "Prepared.",
     )
+    # An install ended well: its section is checked again next (what it installed loads
+    # then, slowly the first time), and the line says so before.
     assert item_status(
         EXTRA, Progress(False, None, "", 9.0, ok=True, install=True)
     ) == (
         "✅ **Ready**",
-        "Installed.",
+        "Installed. Checking the section again: this first check loads the new packages and can take up to a minute; the lines update when it is done.",
     )
     assert item_status(VOICE, Progress(False, 0.2, "Unreachable.", 2.0, ok=False)) == (
         "❌ **Failed**",
@@ -164,3 +175,30 @@ def test_each_variable_of_the_env_file_says_what_uses_it() -> None:
             "not named by the current config — unused: the shell sets it too, and wins",
         ),
     ]
+
+
+PROBLEM = Problem("speech", "/speech/module/voice_id", "voice_id is required")
+
+
+def test_a_fold_s_line_says_its_modules_and_its_status_short() -> None:
+    modules = ["Deepgram v2 (hosted)", "Silero VAD"]
+
+    def line(items: list[SetupItem], problems: list[Problem] = []) -> str:  # noqa: B006
+        return section_line("Speech recognition", modules, items, problems)
+
+    assert line([replace(EXTRA, status="ready")]) == (
+        "Speech recognition — Deepgram v2 (hosted) · Silero VAD · ✅ Ready"
+    )
+    assert line([VOICE]).endswith(" · 🟡 1 optional item missing")
+    assert line([VOICE, VOICE]).endswith(" · 🟡 2 optional items missing")
+    # Required before optional, the config's problems before both.
+    assert line([VOICE, LEXICON]).endswith(" · ❌ 1 required item missing")
+    assert line([EXTRA, LEXICON]).endswith(" · ❌ 2 required items missing")
+    assert line([EXTRA], [PROBLEM]).endswith(" · ❌ 1 problem in the config")
+    assert line([], [PROBLEM, PROBLEM]).endswith(" · ❌ 2 problems in the config")
+    # No module choice: the title and the status alone.
+    assert section_line("Camera", [], [KEY], []) == "Camera · ✅ Ready"
+    # A library that does not import.
+    assert section_line("Voice", [], [EXTRA], [], installed=False) == (
+        "Voice · ❌ not installed"
+    )
